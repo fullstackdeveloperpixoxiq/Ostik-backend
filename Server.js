@@ -22,12 +22,18 @@ require("dotenv").config()
 
 //middleware
 app.use(express.json())
+
+const allowedOrigins= [
+    "http://localhost:5173/",
+    "https://ostik-frontend.vercel.app" //should add that custom domain
+]
+
 app.use(
     cors({
-        origin: "http://localhost:5173",
-        credentials: true,
-    }));
-
+        origin: allowedOrigins,
+        credentials: true
+    })
+)
 
 app.get("/",(req,res)=>{
     res.send("Running")
