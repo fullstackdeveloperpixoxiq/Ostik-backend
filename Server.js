@@ -24,7 +24,7 @@ require("dotenv").config()
 app.use(express.json())
 
 const allowedOrigins= [
-    "http://localhost:5173/",
+    "http://localhost:5173",
     "https://ostik-frontend.vercel.app" //should add that custom domain
 ]
 
