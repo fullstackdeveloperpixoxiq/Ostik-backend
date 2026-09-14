@@ -4,7 +4,7 @@ const OtpSchema = require("../models/OtpSchema");
 const nodeMailer= require("nodemailer");
 const Jwt= require("jsonwebtoken");
 const mongoose= require("mongoose");
-const cloudinary= require("../config/Cloudinary")
+const cloudinary= require("../Config/Cloudinary")
 require("dotenv").config()
 
 const RegiterUser= async(req,res)=>{ 
