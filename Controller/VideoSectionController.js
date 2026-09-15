@@ -1,7 +1,9 @@
 const VideoSection = require("../models/VideoSectionSchema");
 const cloudinary = require("../Config/Cloudinary");
 
-// Create Video Section
+// =========================================================
+// CREATE VIDEO SECTION
+// =========================================================
 const createVideoSection = async (req, res) => {
   try {
     const {
@@ -17,13 +19,23 @@ const createVideoSection = async (req, res) => {
 
     // If video file is uploaded from system
     if (req.file) {
-      const uploadResult = await cloudinary.uploader.upload(
-        req.file.path,
-        {
-          resource_type: "video",
-          folder: "ostik/videos",
-        }
-      );
+      const uploadResult = await new Promise((resolve, reject) => {
+        const stream = cloudinary.uploader.upload_stream(
+          {
+            resource_type: "video",
+            folder: "ostik/videos",
+          },
+          (error, result) => {
+            if (error) {
+              reject(error);
+            } else {
+              resolve(result);
+            }
+          }
+        );
+
+        stream.end(req.file.buffer);
+      });
 
       finalVideoUrl = uploadResult.secure_url;
     }
@@ -51,6 +63,8 @@ const createVideoSection = async (req, res) => {
       data: videoSection,
     });
   } catch (error) {
+    console.error("Create Video Section Error:", error);
+
     res.status(500).json({
       success: false,
       message: "Failed to create video section",
@@ -59,7 +73,10 @@ const createVideoSection = async (req, res) => {
   }
 };
 
-// Get Video Section
+
+// =========================================================
+// GET VIDEO SECTION
+// =========================================================
 const getVideoSection = async (req, res) => {
   try {
     const videoSection = await VideoSection.findOne({
@@ -78,6 +95,8 @@ const getVideoSection = async (req, res) => {
       data: videoSection,
     });
   } catch (error) {
+    console.error("Get Video Section Error:", error);
+
     res.status(500).json({
       success: false,
       message: "Failed to get video section",
@@ -86,7 +105,10 @@ const getVideoSection = async (req, res) => {
   }
 };
 
-// Update Video Section
+
+// =========================================================
+// UPDATE VIDEO SECTION
+// =========================================================
 const updateVideoSection = async (req, res) => {
   try {
     const {
@@ -107,31 +129,54 @@ const updateVideoSection = async (req, res) => {
       });
     }
 
-    let finalVideoUrl = videoUrl || videoSection.videoUrl;
+    // Keep existing video by default
+    let finalVideoUrl = videoSection.videoUrl;
 
     // If a new video file is uploaded
     if (req.file) {
-      const uploadResult = await cloudinary.uploader.upload(
-        req.file.path,
-        {
-          resource_type: "video",
-          folder: "ostik/videos",
-        }
-      );
+      const uploadResult = await new Promise((resolve, reject) => {
+        const stream = cloudinary.uploader.upload_stream(
+          {
+            resource_type: "video",
+            folder: "ostik/videos",
+          },
+          (error, result) => {
+            if (error) {
+              reject(error);
+            } else {
+              resolve(result);
+            }
+          }
+        );
+
+        stream.end(req.file.buffer);
+      });
 
       finalVideoUrl = uploadResult.secure_url;
+    } 
+    // If videoUrl is provided and no new file is uploaded
+    else if (videoUrl) {
+      finalVideoUrl = videoUrl;
     }
 
     videoSection.title = title ?? videoSection.title;
+
     videoSection.description =
       description ?? videoSection.description;
+
     videoSection.videoUrl = finalVideoUrl;
+
     videoSection.buttonText =
       buttonText ?? videoSection.buttonText;
+
     videoSection.buttonLink =
       buttonLink ?? videoSection.buttonLink;
-    videoSection.isActive =
-      isActive ?? videoSection.isActive;
+
+    // Convert form-data string into Boolean
+    if (isActive !== undefined) {
+      videoSection.isActive =
+        isActive === "true" || isActive === true;
+    }
 
     await videoSection.save();
 
@@ -141,6 +186,8 @@ const updateVideoSection = async (req, res) => {
       data: videoSection,
     });
   } catch (error) {
+    console.error("Update Video Section Error:", error);
+
     res.status(500).json({
       success: false,
       message: "Failed to update video section",
@@ -149,7 +196,10 @@ const updateVideoSection = async (req, res) => {
   }
 };
 
-// Delete Video Section
+
+// =========================================================
+// DELETE VIDEO SECTION
+// =========================================================
 const deleteVideoSection = async (req, res) => {
   try {
     const videoSection = await VideoSection.findOneAndDelete({});
@@ -166,6 +216,8 @@ const deleteVideoSection = async (req, res) => {
       message: "Video section deleted successfully",
     });
   } catch (error) {
+    console.error("Delete Video Section Error:", error);
+
     res.status(500).json({
       success: false,
       message: "Failed to delete video section",
@@ -174,5 +226,5 @@ const deleteVideoSection = async (req, res) => {
   }
 };
 
-module.exports = {createVideoSection,getVideoSection,updateVideoSection,deleteVideoSection,};
 
+module.exports = {createVideoSection,getVideoSection, updateVideoSection, deleteVideoSection,};

@@ -116,6 +116,30 @@ const GetCategories = async (req, res) => {
 };
 
 
+const GetMainCategories= async(req,res)=>{
+    try{
+        const categories= await CategorySchema.find({
+            isActive: true,
+            parentCategory: null
+        })
+        .populate("parentCategory", "name slug")
+            .sort({ createdAt: -1 });
+
+            res.status(200).json({
+                message: "Main categories fetched successfully",
+                categories
+            })
+    }
+    catch(err){
+        console.log(err);
+         res.status(500).json({
+            message: "Server error",
+            error: err.message
+        });    
+    }
+}
+
+
 
 // GET SINGLE CATEGORY
 const GetCategory = async (req, res) => {
@@ -264,4 +288,4 @@ const DeleteCategory = async (req, res) => {
 };
 
 
-module.exports = {CreateCategory, GetCategories, GetCategory, UpdateCategory, DeleteCategory };
+module.exports = {CreateCategory, GetCategories, GetCategory, UpdateCategory, DeleteCategory, GetMainCategories };
