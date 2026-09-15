@@ -25,7 +25,10 @@ app.use(express.json())
 
 const allowedOrigins= [
     "http://localhost:5173",
-    "https://ostik-frontend.vercel.app" //should add that custom domain
+    "https://ostik-frontend.vercel.app",
+    "https://ostik.in",
+    "https://www.ostik.in" //should add that custom domain
+
 ]
 
 app.use(
