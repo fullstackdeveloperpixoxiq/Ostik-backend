@@ -1,5 +1,5 @@
 const express = require("express");
-const {CreateOrder,GetMyOrders,GetSingleOrder,CancelOrder, UpdateOrder} = require("../Controller/OrderController");
+const {CreateOrder,GetMyOrders,GetSavedAddresses,GetSingleOrder,CancelOrder, UpdateOrder} = require("../Controller/OrderController");
 const authMiddleware = require("../Middleware/AuthMiddleware");
 const AdminMiddleware = require("../Middleware/AdminMiddleware");
 const router = express.Router();
@@ -7,6 +7,7 @@ const router = express.Router();
 
 router.post("/", authMiddleware, CreateOrder);
 router.get("/", authMiddleware, GetMyOrders);
+router.get("/addresses", authMiddleware, GetSavedAddresses);
 router.get("/:id", authMiddleware, GetSingleOrder);
 router.put("/:id/cancel", authMiddleware, CancelOrder);
 

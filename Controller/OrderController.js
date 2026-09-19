@@ -460,6 +460,54 @@ const GetMyOrders = async (req, res) => {
     }
 };
 
+// GET UNIQUE ADDRESSES FROM THE USER'S PREVIOUS ORDERS
+const GetSavedAddresses = async (req, res) => {
+    try {
+        const userId = req.user.userId;
+
+        const orders = await OrderSchema.find({ user: userId })
+            .sort({ createdAt: -1 })
+            .select("shippingAddress");
+
+        const addresses = [];
+        const seen = new Set();
+
+        for (const order of orders) {
+            const address = order.shippingAddress;
+
+            if (!address) continue;
+
+            const key = [
+                address.fullName,
+                address.phone,
+                address.address,
+                address.city,
+                address.state,
+                address.pincode,
+            ]
+                .map((value) => String(value || "").trim().toLowerCase())
+                .join("|");
+
+            if (!seen.has(key)) {
+                seen.add(key);
+                addresses.push(address);
+            }
+        }
+
+        res.status(200).json({
+            message: "Saved addresses fetched successfully",
+            addresses,
+        });
+    } catch (err) {
+        console.log(err);
+
+        res.status(500).json({
+            message: "Server error",
+            error: err.message,
+        });
+    }
+};
+
 
 
 // GET SINGLE ORDER
@@ -617,4 +665,4 @@ const UpdateOrder = async (req, res) => {
 };
 
 
-module.exports = { CreateOrder, GetMyOrders, GetSingleOrder, CancelOrder, UpdateOrder };
+module.exports = { CreateOrder, GetMyOrders, GetSavedAddresses, GetSingleOrder, CancelOrder, UpdateOrder };
