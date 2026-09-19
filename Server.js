@@ -15,6 +15,7 @@ const variantRouter= require("./Routes/VarientRoutes")
 const bannerRouter= require("./Routes/BannerRoutes")
 const VideoSectionRouter= require("./Routes/VideoSectionRoute")
 const ContactRouter= require("./Routes/ContactRoutes")
+const NewsletterRouter= require("./Routes/NewsletterRoutes")
 
 const cors= require("cors")
 require("dotenv").config()
@@ -56,6 +57,7 @@ app.use("/api/variant", variantRouter )
 app.use("/api/banner", bannerRouter )
 app.use("/api/video-section", VideoSectionRouter )
 app.use("/api/contact", ContactRouter)
+app.use("/api/newsletter", NewsletterRouter)
 
 
 //admin side
