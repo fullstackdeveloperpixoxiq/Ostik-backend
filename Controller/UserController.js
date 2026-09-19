@@ -362,7 +362,8 @@ const ForgotPassword= async(req,res)=>{
         });
 
         res.status(200).json({
-            message:"OTP send to your email"
+            message:"OTP send to your email",
+            userId: user._id
         })
     }
     catch (error) {
