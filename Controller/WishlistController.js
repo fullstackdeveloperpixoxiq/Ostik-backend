@@ -96,16 +96,16 @@ const GetWishlist = async (req, res) => {
         }
 
         const products = await Promise.all(
-            wishlist.products.map(async (product) => {
-
-                const variant = await VariantSchema.findOne({
+            wishlist.products.filter(Boolean)
+            .map(async (product)=>{
+                const variant= await VariantSchema.findOne({
                     product: product._id,
                     isActive: true
-                });
+                })
 
                 return {
                     ...product.toObject(),
-                    variant
+                    variant: variant ? variant.toObject() : null
                 };
             })
         );
