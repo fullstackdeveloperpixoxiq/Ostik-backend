@@ -137,6 +137,36 @@ const orderSchema = new mongoose.Schema(
       default: "Pending",
     },
 
+    deliveredAt: {
+  type: Date,
+  default: null,
+},
+
+    cancellation: {
+  reason: {
+    type: String,
+    trim: true,
+    default: "",
+  },
+
+  comment: {
+    type: String,
+    trim: true,
+    default: "",
+  },
+
+  cancelledAt: {
+    type: Date,
+    default: null,
+  },
+
+  cancelledBy: {
+    type: String,
+    enum: ["user", "admin"],
+    default: null,
+  },
+},
+
     trackingNumber: {
       type: String,
       default: "",

@@ -790,7 +790,427 @@ const DeleteAddress = async (req, res) => {
 };
 
 
+// =========================================================
+// ADMIN - GET ALL CUSTOMERS
+// =========================================================
+
+const GetCustomers = async (req, res) => {
+    try {
+
+        const customers = await UserSchema.find({
+            role: "user"
+        })
+            .select("-password")
+            .sort({ createdAt: -1 });
+
+        res.status(200).json({
+            message: "Customers fetched successfully",
+            customers
+        });
+
+    } catch (error) {
+
+        console.log("Get customers error:", error);
+
+        res.status(500).json({
+            message: "Server error",
+            error: error.message
+        });
+    }
+};
+
+
+// =========================================================
+// ADMIN - GET SINGLE CUSTOMER
+// =========================================================
+
+const GetCustomer = async (req, res) => {
+    try {
+
+        const { id } = req.params;
+
+        const customer = await UserSchema.findOne({
+            _id: id,
+            role: "user"
+        }).select("-password");
+
+        if (!customer) {
+            return res.status(404).json({
+                message: "Customer not found"
+            });
+        }
+
+        res.status(200).json({
+            message: "Customer fetched successfully",
+            customer
+        });
+
+    } catch (error) {
+
+        console.log("Get customer error:", error);
+
+        res.status(500).json({
+            message: "Server error",
+            error: error.message
+        });
+    }
+};
+
+
+// =========================================================
+// ADMIN - CREATE CUSTOMER
+// =========================================================
+
+const CreateCustomer = async (req, res) => {
+    try {
+
+        console.log("CUSTOMER BODY:", req.body);
+        console.log("CUSTOMER FILE:", req.file);
+
+        const {
+            name,
+            email,
+            password,
+            country,
+            preferredcurrency,
+            isActive
+        } = req.body;
+
+        // Required fields
+        if (!name || !email || !password) {
+            return res.status(400).json({
+                message: "Name, email and password are required"
+            });
+        }
+
+        // Check existing email
+        const existingUser = await UserSchema.findOne({
+            email: email.toLowerCase().trim()
+        });
+
+        if (existingUser) {
+            return res.status(400).json({
+                message: "A user with this email already exists"
+            });
+        }
+
+        // Hash password
+        const hashedPassword = await bcrypt.hash(
+            password,
+            10
+        );
+
+        // Create user object
+        const customerData = {
+            name: name.trim(),
+            email: email.toLowerCase().trim(),
+            password: hashedPassword,
+            role: "user",
+            country: country || "India",
+            preferredcurrency:
+                preferredcurrency || "INR",
+
+            // Admin-created customers are considered
+            // email verified.
+            isEmailVerified: true,
+
+            isActive:
+                isActive === undefined
+                    ? true
+                    : isActive === "true"
+        };
+
+        // Upload profile image if provided
+        if (req.file) {
+
+            const uploadedImage =
+                await new Promise((resolve, reject) => {
+
+                    const stream =
+                        cloudinary.uploader.upload_stream(
+                            {
+                                folder: "ostik/profile",
+                                resource_type: "image"
+                            },
+                            (error, result) => {
+
+                                if (error) {
+                                    reject(error);
+                                } else {
+                                    resolve(result);
+                                }
+
+                            }
+                        );
+
+                    stream.end(req.file.buffer);
+                });
+
+            customerData.profileImage =
+                uploadedImage.secure_url;
+        }
+
+        const customer =
+            await UserSchema.create(
+                customerData
+            );
+
+        const safeCustomer =
+            customer.toObject();
+
+        delete safeCustomer.password;
+
+        res.status(201).json({
+            message:
+                "Customer created successfully",
+            customer: safeCustomer
+        });
+
+    } catch (error) {
+
+        console.log(
+            "Create customer error:",
+            error
+        );
+
+        res.status(500).json({
+            message: "Server error",
+            error: error.message
+        });
+    }
+};
+
+
+// =========================================================
+// ADMIN - UPDATE CUSTOMER
+// =========================================================
+
+const UpdateCustomer = async (req, res) => {
+    try {
+
+        const { id } = req.params;
+
+        const {
+            name,
+            email,
+            password,
+            country,
+            preferredcurrency,
+            isActive
+        } = req.body;
+
+        const customer =
+            await UserSchema.findOne({
+                _id: id,
+                role: "user"
+            });
+
+        if (!customer) {
+            return res.status(404).json({
+                message: "Customer not found"
+            });
+        }
+
+        // ---------------------------------------------
+        // UPDATE BASIC FIELDS
+        // ---------------------------------------------
+
+        if (name !== undefined) {
+            customer.name = name.trim();
+        }
+
+        // ---------------------------------------------
+        // UPDATE EMAIL
+        // ---------------------------------------------
+
+        if (email !== undefined) {
+
+            const normalizedEmail =
+                email.toLowerCase().trim();
+
+            const existingUser =
+                await UserSchema.findOne({
+                    email: normalizedEmail,
+                    _id: { $ne: id }
+                });
+
+            if (existingUser) {
+                return res.status(400).json({
+                    message:
+                        "Another user already uses this email"
+                });
+            }
+
+            customer.email = normalizedEmail;
+        }
+
+        // ---------------------------------------------
+        // UPDATE PASSWORD
+        // ---------------------------------------------
+
+        if (
+            password !== undefined &&
+            password.trim() !== ""
+        ) {
+
+            customer.password =
+                await bcrypt.hash(
+                    password,
+                    10
+                );
+        }
+
+        // ---------------------------------------------
+        // UPDATE COUNTRY
+        // ---------------------------------------------
+
+        if (country !== undefined) {
+            customer.country = country;
+        }
+
+        // ---------------------------------------------
+        // UPDATE CURRENCY
+        // ---------------------------------------------
+
+        if (
+            preferredcurrency !== undefined
+        ) {
+            customer.preferredcurrency =
+                preferredcurrency;
+        }
+
+        // ---------------------------------------------
+        // UPDATE ACTIVE STATUS
+        // ---------------------------------------------
+
+        if (isActive !== undefined) {
+            customer.isActive =
+                isActive === "true" ||
+                isActive === true;
+        }
+
+        // ---------------------------------------------
+        // UPDATE PROFILE IMAGE
+        // ---------------------------------------------
+
+        if (req.file) {
+
+            const uploadedImage =
+                await new Promise(
+                    (resolve, reject) => {
+
+                        const stream =
+                            cloudinary.uploader.upload_stream(
+                                {
+                                    folder:
+                                        "ostik/profile",
+                                    resource_type:
+                                        "image"
+                                },
+                                (
+                                    error,
+                                    result
+                                ) => {
+
+                                    if (error) {
+                                        reject(error);
+                                    } else {
+                                        resolve(result);
+                                    }
+
+                                }
+                            );
+
+                        stream.end(
+                            req.file.buffer
+                        );
+                    }
+                );
+
+            customer.profileImage =
+                uploadedImage.secure_url;
+        }
+
+        await customer.save();
+
+        const safeCustomer =
+            customer.toObject();
+
+        delete safeCustomer.password;
+
+        res.status(200).json({
+            message:
+                "Customer updated successfully",
+            customer: safeCustomer
+        });
+
+    } catch (error) {
+
+        console.log(
+            "Update customer error:",
+            error
+        );
+
+        res.status(500).json({
+            message: "Server error",
+            error: error.message
+        });
+    }
+};
+
+
+// =========================================================
+// ADMIN - TOGGLE CUSTOMER STATUS
+// =========================================================
+
+const ToggleCustomerStatus = async (
+    req,
+    res
+) => {
+    try {
+
+        const { id } = req.params;
+
+        const customer =
+            await UserSchema.findOne({
+                _id: id,
+                role: "user"
+            });
+
+        if (!customer) {
+            return res.status(404).json({
+                message: "Customer not found"
+            });
+        }
+
+        customer.isActive =
+            !customer.isActive;
+
+        await customer.save();
+
+        res.status(200).json({
+            message: customer.isActive
+                ? "Customer activated successfully"
+                : "Customer deactivated successfully",
+            isActive: customer.isActive
+        });
+
+    } catch (error) {
+
+        console.log(
+            "Toggle customer status error:",
+            error
+        );
+
+        res.status(500).json({
+            message: "Server error",
+            error: error.message
+        });
+    }
+};
+
 
 module.exports = {RegiterUser, VerifyOTP, LoginUser,ForgotPassword, verifyForgotPasswordOTP, ResetPassword,
-    ProtectedTest, GetProfile, UpdateProfile, AddAddress, UpdateAddress, DeleteAddress, ResendOTP
+    ProtectedTest, GetProfile, UpdateProfile, AddAddress, UpdateAddress, DeleteAddress, ResendOTP,
+    GetCustomers, GetCustomer, CreateCustomer, UpdateCustomer, ToggleCustomerStatus
 }

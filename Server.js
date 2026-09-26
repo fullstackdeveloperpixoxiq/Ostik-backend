@@ -16,6 +16,8 @@ const bannerRouter= require("./Routes/BannerRoutes")
 const VideoSectionRouter= require("./Routes/VideoSectionRoute")
 const ContactRouter= require("./Routes/ContactRoutes")
 const NewsletterRouter= require("./Routes/NewsletterRoutes")
+const ReturnRouter= require("./Routes/ReturnRoutes")
+const ExchangeRouter= require("./Routes/ExchangeRoutes")
 
 const cors= require("cors")
 require("dotenv").config()
@@ -28,7 +30,8 @@ const allowedOrigins= [
     "http://localhost:5173",
     "https://ostik-frontend.vercel.app",
     "https://ostik.in",
-    "https://www.ostik.in" //should add that custom domain
+    "https://www.ostik.in",
+    "https://ostik-admin-ld6j.vercel.app"
 
 ]
 
@@ -58,6 +61,8 @@ app.use("/api/banner", bannerRouter )
 app.use("/api/video-section", VideoSectionRouter )
 app.use("/api/contact", ContactRouter)
 app.use("/api/newsletter", NewsletterRouter)
+app.use("/api/return", ReturnRouter)
+app.use("/api/exchange", ExchangeRouter)
 
 
 //admin side

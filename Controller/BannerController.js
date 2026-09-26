@@ -140,20 +140,81 @@ const UpdateBanner = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const banner = await Banner.findByIdAndUpdate(
-      id,
-      req.body,
-      {
-        new: true,
-        runValidators: true,
-      }
-    );
+    const banner = await Banner.findById(id)
 
     if (!banner) {
       return res.status(404).json({
         message: "Banner not found",
       });
     }
+
+    const {
+      title,
+      subtitle,
+      buttonText,
+      buttonLink,
+      category,
+      displayOrder,
+      status,
+    } = req.body;
+
+    // Update text fields
+    if (title !== undefined) {
+      banner.title = title;
+    }
+
+    if (subtitle !== undefined) {
+      banner.subtitle = subtitle;
+    }
+
+    if (buttonText !== undefined) {
+      banner.buttonText = buttonText;
+    }
+
+    if (buttonLink !== undefined) {
+      banner.buttonLink = buttonLink;
+    }
+
+    if (category !== undefined) {
+      banner.category = category || null;
+    }
+
+    if (displayOrder !== undefined) {
+      banner.displayOrder = Number(displayOrder);
+    }
+
+    if (status !== undefined) {
+      banner.status = status;
+    }
+
+    // Update image if a new image is selected
+    if (req.file) {
+      const uploadResult = await new Promise(
+        (resolve, reject) => {
+          const stream =
+            cloudinary.uploader.upload_stream(
+              {
+                folder: "ostik/banners",
+                resource_type: "image",
+              },
+              (error, result) => {
+                if (error) {
+                  reject(error);
+                } else {
+                  resolve(result);
+                }
+              }
+            );
+
+          stream.end(req.file.buffer);
+        }
+      );
+
+      banner.image =
+        uploadResult.secure_url;
+    }
+
+    await banner.save();
 
     return res.status(200).json({
       message: "Banner updated successfully",

@@ -54,6 +54,119 @@ const subscribeNewsletter = async (req, res) => {
   }
 };
 
+
+const GetAllNewsletterSubscribers = async (
+  req,
+  res
+) => {
+  try {
+    const subscribers =
+      await NewsletterSubscriber.find({})
+        .sort({ subscribedAt: -1 });
+
+    return res.status(200).json({
+      message:
+        "Newsletter subscribers fetched successfully",
+      subscribers,
+    });
+  } catch (error) {
+    console.error(
+      "Get newsletter subscribers error:",
+      error
+    );
+
+    return res.status(500).json({
+      message: "Server error",
+      error: error.message,
+    });
+  }
+};
+
+
+// =========================================================
+// GET SINGLE NEWSLETTER SUBSCRIBER - ADMIN
+// =========================================================
+
+const GetNewsletterSubscriber = async (
+  req,
+  res
+) => {
+  try {
+    const { id } = req.params;
+
+    const subscriber =
+      await NewsletterSubscriber.findById(id);
+
+    if (!subscriber) {
+      return res.status(404).json({
+        message: "Subscriber not found",
+      });
+    }
+
+    return res.status(200).json({
+      message:
+        "Subscriber fetched successfully",
+      subscriber,
+    });
+  } catch (error) {
+    console.error(
+      "Get newsletter subscriber error:",
+      error
+    );
+
+    return res.status(500).json({
+      message: "Server error",
+      error: error.message,
+    });
+  }
+};
+
+
+// =========================================================
+// TOGGLE NEWSLETTER STATUS - ADMIN
+// =========================================================
+
+const ToggleNewsletterStatus = async (
+  req,
+  res
+) => {
+  try {
+    const { id } = req.params;
+
+    const subscriber =
+      await NewsletterSubscriber.findById(id);
+
+    if (!subscriber) {
+      return res.status(404).json({
+        message: "Subscriber not found",
+      });
+    }
+
+    subscriber.isActive =
+      !subscriber.isActive;
+
+    await subscriber.save();
+
+    return res.status(200).json({
+      message: subscriber.isActive
+        ? "Subscriber activated successfully"
+        : "Subscriber deactivated successfully",
+
+      subscriber,
+    });
+  } catch (error) {
+    console.error(
+      "Toggle newsletter status error:",
+      error
+    );
+
+    return res.status(500).json({
+      message: "Server error",
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
-  subscribeNewsletter,
+  subscribeNewsletter, GetAllNewsletterSubscribers, GetNewsletterSubscriber,ToggleNewsletterStatus
 };

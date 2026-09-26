@@ -338,5 +338,87 @@ const GetMyPayments = async (req, res) => {
     }
 };
 
+// =========================================================
+// GET ALL PAYMENTS - ADMIN
+// =========================================================
+const GetAllPayments = async (req, res) => {
+    try {
 
-module.exports = {CreatePayment,GetMyPayments,VerifyPayment};
+        const payments = await PaymentSchema.find({})
+            .populate(
+                "user",
+                "name email profileImage"
+            )
+            .populate(
+                "order",
+                "total orderStatus paymentStatus currency paymentMethod"
+            )
+            .sort({ createdAt: -1 });
+
+        return res.status(200).json({
+            message: "All payments fetched successfully",
+            payments
+        });
+
+    } catch (err) {
+
+        console.log(err);
+
+        return res.status(500).json({
+            message: "Server error",
+            error: err.message
+        });
+    }
+};
+
+
+// =========================================================
+// GET SINGLE PAYMENT - ADMIN
+// =========================================================
+
+const GetAdminPayment = async (req, res) => {
+    try {
+
+        const { id } = req.params;
+
+        console.log("ADMIN PAYMENT ID:", id);
+
+        const payment = await PaymentSchema.findById(id)
+            .populate(
+                "user",
+                "name email profileImage country"
+            )
+            .populate("order")
+            .lean();
+
+        if (!payment) {
+            return res.status(404).json({
+                message: "Payment not found"
+            });
+        }
+
+        console.log(
+            "ADMIN PAYMENT:",
+            JSON.stringify(payment, null, 2)
+        );
+
+        return res.status(200).json({
+            message: "Payment fetched successfully",
+            payment
+        });
+
+    } catch (err) {
+
+        console.error(
+            "GetAdminPayment ERROR:",
+            err
+        );
+
+        return res.status(500).json({
+            message: "Failed to fetch payment details",
+            error: err.message
+        });
+    }
+};
+
+module.exports = {CreatePayment,GetMyPayments,VerifyPayment, GetAllPayments, GetAdminPayment};

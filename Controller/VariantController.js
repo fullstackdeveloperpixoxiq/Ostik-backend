@@ -1,13 +1,13 @@
 const Variant = require("../models/VariantSchema");
 const Product = require("../models/ProductSchema");
+const cloudinary = require("../Config/Cloudinary");
 
 
-//admin side
+// =========================================================
+// CREATE VARIANT - ADMIN
+// =========================================================
 const CreateVariant = async (req, res) => {
   try {
-    console.log("CONTENT TYPE:", req.headers["content-type"]);
-    console.log("REQ BODY:", req.body);
-    console.log("REQ FILES:", req.files);
     const {
       product,
       name,
@@ -15,18 +15,26 @@ const CreateVariant = async (req, res) => {
       price,
       discountPercent,
       stock,
-      images,
+      isActive,
     } = req.body;
 
     // Required fields
-    if (!product || !name || !sku || price === undefined || stock === undefined) {
+    if (
+      !product ||
+      !name ||
+      !sku ||
+      price === undefined ||
+      stock === undefined
+    ) {
       return res.status(400).json({
-        message: "Product, name, SKU, price and stock are required",
+        message:
+          "Product, name, SKU, price and stock are required",
       });
     }
 
-    // Check product exists
-    const existingProduct = await Product.findById(product);
+    // Check product
+    const existingProduct =
+      await Product.findById(product);
 
     if (!existingProduct) {
       return res.status(404).json({
@@ -34,8 +42,15 @@ const CreateVariant = async (req, res) => {
       });
     }
 
+    // Normalize SKU
+    const normalizedSKU =
+      sku.trim().toUpperCase();
+
     // Check duplicate SKU
-    const existingSKU = await Variant.findOne({ sku });
+    const existingSKU =
+      await Variant.findOne({
+        sku: normalizedSKU,
+      });
 
     if (existingSKU) {
       return res.status(409).json({
@@ -43,21 +58,117 @@ const CreateVariant = async (req, res) => {
       });
     }
 
-    const variant = await Variant.create({
-      product,
-      name,
-      sku,
-      price,
-      discountPercent,
-      stock,
-      images,
-    });
+    // =====================================================
+    // UPLOAD VARIANT IMAGES
+    // =====================================================
+
+    let uploadedImages = [];
+
+    if (
+      req.files &&
+      req.files.length > 0
+    ) {
+      uploadedImages = await Promise.all(
+        req.files.map((file) => {
+          return new Promise(
+            (resolve, reject) => {
+              const stream =
+                cloudinary.uploader.upload_stream(
+                  {
+                    folder:
+                      "ostik/variants",
+                    resource_type:
+                      "image",
+                  },
+                  (
+                    error,
+                    result
+                  ) => {
+                    if (error) {
+                      reject(error);
+                    } else {
+                      resolve(
+                        result.secure_url
+                      );
+                    }
+                  }
+                );
+
+              stream.end(
+                file.buffer
+              );
+            }
+          );
+        })
+      );
+    }
+
+    // =====================================================
+    // CREATE VARIANT
+    // =====================================================
+
+    const variant =
+      await Variant.create({
+        product,
+        name: name.trim(),
+        sku: normalizedSKU,
+        price: Number(price),
+        discountPercent:
+          discountPercent !== undefined
+            ? Number(discountPercent)
+            : 0,
+        stock: Number(stock),
+        images: uploadedImages,
+        isActive:
+          isActive === undefined
+            ? true
+            : isActive === "true" ||
+              isActive === true,
+      });
 
     return res.status(201).json({
-      message: "Variant created successfully",
+      message:
+        "Variant created successfully",
       variant,
     });
+  } catch (err) {
+    console.log(
+      "CreateVariant ERROR:",
+      err
+    );
 
+    return res.status(500).json({
+      message: "Server error",
+      error: err.message,
+    });
+  }
+};
+
+
+// =========================================================
+// GET ALL VARIANTS - ADMIN
+// =========================================================
+const GetAllVariants = async (
+  req,
+  res
+) => {
+  try {
+    const variants =
+      await Variant.find()
+        .populate(
+          "product",
+          "name slug"
+        )
+        .sort({
+          createdAt: -1,
+        });
+
+    return res.status(200).json({
+      message:
+        "Variants fetched successfully",
+      count: variants.length,
+      variants,
+    });
   } catch (err) {
     console.log(err);
 
@@ -69,8 +180,54 @@ const CreateVariant = async (req, res) => {
 };
 
 
+// =========================================================
+// GET SINGLE VARIANT - ADMIN
+// =========================================================
+const GetAdminVariant = async (
+  req,
+  res
+) => {
+  try {
+    const { id } = req.params;
 
-const UpdateVariant = async (req, res) => {
+    const variant =
+      await Variant.findById(id).populate(
+        "product",
+        "name slug images"
+      );
+
+    if (!variant) {
+      return res.status(404).json({
+        message: "Variant not found",
+      });
+    }
+
+    return res.status(200).json({
+      message:
+        "Variant fetched successfully",
+      variant,
+    });
+  } catch (err) {
+    console.log(
+      "GetAdminVariant ERROR:",
+      err
+    );
+
+    return res.status(500).json({
+      message: "Server error",
+      error: err.message,
+    });
+  }
+};
+
+
+// =========================================================
+// UPDATE VARIANT - ADMIN
+// =========================================================
+const UpdateVariant = async (
+  req,
+  res
+) => {
   try {
     const { id } = req.params;
 
@@ -80,11 +237,11 @@ const UpdateVariant = async (req, res) => {
       price,
       discountPercent,
       stock,
-      images,
       isActive,
     } = req.body;
 
-    const variant = await Variant.findById(id);
+    const variant =
+      await Variant.findById(id);
 
     if (!variant) {
       return res.status(404).json({
@@ -92,38 +249,131 @@ const UpdateVariant = async (req, res) => {
       });
     }
 
-    // Check SKU duplication
-    if (sku && sku !== variant.sku) {
-      const existingSKU = await Variant.findOne({
-        sku,
-        _id: { $ne: id },
-      });
+    // =====================================================
+    // SKU
+    // =====================================================
 
-      if (existingSKU) {
-        return res.status(409).json({
-          message: "SKU already exists",
-        });
+    if (sku !== undefined) {
+      const normalizedSKU =
+        sku.trim().toUpperCase();
+
+      if (
+        normalizedSKU !== variant.sku
+      ) {
+        const existingSKU =
+          await Variant.findOne({
+            sku: normalizedSKU,
+            _id: { $ne: id },
+          });
+
+        if (existingSKU) {
+          return res.status(409).json({
+            message:
+              "SKU already exists",
+          });
+        }
+
+        variant.sku =
+          normalizedSKU;
       }
     }
 
-    variant.name = name ?? variant.name;
-    variant.sku = sku ?? variant.sku;
-    variant.price = price ?? variant.price;
-    variant.discountPercent =
-      discountPercent ?? variant.discountPercent;
-    variant.stock = stock ?? variant.stock;
-    variant.images = images ?? variant.images;
-    variant.isActive = isActive ?? variant.isActive;
+    // =====================================================
+    // BASIC FIELDS
+    // =====================================================
+
+    if (name !== undefined) {
+      variant.name =
+        name.trim();
+    }
+
+    if (price !== undefined) {
+      variant.price =
+        Number(price);
+    }
+
+    if (
+      discountPercent !==
+      undefined
+    ) {
+      variant.discountPercent =
+        Number(discountPercent);
+    }
+
+    if (stock !== undefined) {
+      variant.stock =
+        Number(stock);
+    }
+
+    if (isActive !== undefined) {
+      variant.isActive =
+        isActive === "true" ||
+        isActive === true;
+    }
+
+    // =====================================================
+    // NEW IMAGES
+    // =====================================================
+
+    if (
+      req.files &&
+      req.files.length > 0
+    ) {
+      const newImages =
+        await Promise.all(
+          req.files.map((file) => {
+            return new Promise(
+              (
+                resolve,
+                reject
+              ) => {
+                const stream =
+                  cloudinary.uploader.upload_stream(
+                    {
+                      folder:
+                        "ostik/variants",
+                      resource_type:
+                        "image",
+                    },
+                    (
+                      error,
+                      result
+                    ) => {
+                      if (error) {
+                        reject(error);
+                      } else {
+                        resolve(
+                          result.secure_url
+                        );
+                      }
+                    }
+                  );
+
+                stream.end(
+                  file.buffer
+                );
+              }
+            );
+          })
+        );
+
+      // Replace old variant images
+      variant.images =
+        newImages;
+    }
 
     await variant.save();
 
     return res.status(200).json({
-      message: "Variant updated successfully",
+      message:
+        "Variant updated successfully",
       variant,
     });
-
   } catch (err) {
-    console.log(err);
+    console.log(
+      "UpdateVariant ERROR:",
+      err
+    );
 
     return res.status(500).json({
       message: "Server error",
@@ -133,13 +383,18 @@ const UpdateVariant = async (req, res) => {
 };
 
 
-
-
-const DeleteVariant = async (req, res) => {
+// =========================================================
+// DELETE VARIANT - ADMIN
+// =========================================================
+const DeleteVariant = async (
+  req,
+  res
+) => {
   try {
     const { id } = req.params;
 
-    const variant = await Variant.findById(id);
+    const variant =
+      await Variant.findById(id);
 
     if (!variant) {
       return res.status(404).json({
@@ -147,12 +402,14 @@ const DeleteVariant = async (req, res) => {
       });
     }
 
-    await Variant.findByIdAndDelete(id);
+    await Variant.findByIdAndDelete(
+      id
+    );
 
     return res.status(200).json({
-      message: "Variant deleted successfully",
+      message:
+        "Variant deleted successfully",
     });
-
   } catch (err) {
     console.log(err);
 
@@ -164,38 +421,21 @@ const DeleteVariant = async (req, res) => {
 };
 
 
-
-const GetAllVariants = async (req, res) => {
+// =========================================================
+// GET PRODUCT VARIANTS - USER
+// =========================================================
+const GetProductVariants = async (
+  req,
+  res
+) => {
   try {
+    const { productId } =
+      req.params;
 
-    const variants = await Variant.find()
-      .populate("product", "name slug")
-      .sort({ createdAt: -1 });
-
-    return res.status(200).json({
-      message: "Variants fetched successfully",
-      count: variants.length,
-      variants,
-    });
-
-  } catch (err) {
-    console.log(err);
-
-    return res.status(500).json({
-      message: "Server error",
-      error: err.message,
-    });
-  }
-};
-
-
-//user side
-
-const GetProductVariants = async (req, res) => {
-  try {
-    const { productId } = req.params;
-
-    const product = await Product.findById(productId);
+    const product =
+      await Product.findById(
+        productId
+      );
 
     if (!product) {
       return res.status(404).json({
@@ -203,16 +443,17 @@ const GetProductVariants = async (req, res) => {
       });
     }
 
-    const variants = await Variant.find({
-      product: productId,
-      isActive: true,
-    });
+    const variants =
+      await Variant.find({
+        product: productId,
+        isActive: true,
+      });
 
     return res.status(200).json({
-      message: "Product variants fetched successfully",
+      message:
+        "Product variants fetched successfully",
       variants,
     });
-
   } catch (err) {
     console.log(err);
 
@@ -224,15 +465,24 @@ const GetProductVariants = async (req, res) => {
 };
 
 
-
-const GetSingleVariant = async (req, res) => {
+// =========================================================
+// GET SINGLE VARIANT - USER
+// =========================================================
+const GetSingleVariant = async (
+  req,
+  res
+) => {
   try {
     const { id } = req.params;
 
-    const variant = await Variant.findOne({
-      _id: id,
-      isActive: true,
-    }).populate("product", "name slug");
+    const variant =
+      await Variant.findOne({
+        _id: id,
+        isActive: true,
+      }).populate(
+        "product",
+        "name slug"
+      );
 
     if (!variant) {
       return res.status(404).json({
@@ -241,10 +491,10 @@ const GetSingleVariant = async (req, res) => {
     }
 
     return res.status(200).json({
-      message: "Variant fetched successfully",
+      message:
+        "Variant fetched successfully",
       variant,
     });
-
   } catch (err) {
     console.log(err);
 
@@ -256,4 +506,5 @@ const GetSingleVariant = async (req, res) => {
 };
 
 
-module.exports = {CreateVariant,UpdateVariant,DeleteVariant,GetAllVariants,GetProductVariants,GetSingleVariant};
+module.exports = {CreateVariant,GetAllVariants,GetAdminVariant,UpdateVariant,DeleteVariant,
+  GetProductVariants,GetSingleVariant,};

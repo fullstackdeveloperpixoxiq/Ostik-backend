@@ -549,41 +549,98 @@ const GetSingleOrder = async (req, res) => {
 
 // CANCEL ORDER
 const CancelOrder = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+
+    const { id } = req.params;
+
+    const { reason, comment } = req.body;
+
+    // -------------------------
+    // VALIDATION
+    // -------------------------
+
+    if (!reason) {
+      return res.status(400).json({
+        message: "Cancellation reason is required",
+      });
+    }
+
+    // -------------------------
+    // FIND ORDER
+    // -------------------------
+
+    const order = await OrderSchema.findOne({
+      _id: id,
+      user: userId,
+    });
+
+    if (!order) {
+      return res.status(404).json({
+        message: "Order not found",
+      });
+    }
+
+    // -------------------------
+    // CHECK CANCELLATION STATUS
+    // -------------------------
+
+    if (
+      order.orderStatus === "Shipped" ||
+      order.orderStatus === "Delivered" ||
+      order.orderStatus === "Cancelled"
+    ) {
+      return res.status(400).json({
+        message: "Order cannot be cancelled",
+      });
+    }
+
+    // -------------------------
+    // CANCEL ORDER
+    // -------------------------
+
+    order.orderStatus = "Cancelled";
+
+    order.cancellation = {
+      reason,
+      comment: comment || "",
+      cancelledAt: new Date(),
+      cancelledBy: "user",
+    };
+
+    await order.save();
+
+    // -------------------------
+    // RESPONSE
+    // -------------------------
+
+    res.status(200).json({
+      message: "Order cancelled successfully",
+      order,
+    });
+
+  } catch (err) {
+    console.log(err);
+
+    res.status(500).json({
+      message: "Server error",
+      error: err.message,
+    });
+  }
+};
+
+// ADMIN 
+
+const GetAllOrders = async (req, res) => {
     try {
 
-        const userId = req.user.userId;
-
-        const { id } = req.params;
-
-        const order = await OrderSchema.findOne({
-            _id: id,
-            user: userId
-        });
-
-        if (!order) {
-            return res.status(404).json({
-                message: "Order not found"
-            });
-        }
-
-        // Don't allow cancellation after shipping
-        if (
-            order.orderStatus === "Shipped" ||
-            order.orderStatus === "Delivered" ||
-            order.orderStatus === "Cancelled"
-        ) {
-            return res.status(400).json({
-                message: "Order cannot be cancelled"
-            });
-        }
-
-        order.orderStatus = "Cancelled";
-
-        await order.save();
+        const orders = await OrderSchema.find({})
+            .populate("user", "name email")
+            .sort({ createdAt: -1 });
 
         res.status(200).json({
-            message: "Order cancelled successfully",
-            order
+            message: "All orders fetched successfully",
+            orders
         });
 
     } catch (err) {
@@ -598,7 +655,7 @@ const CancelOrder = async (req, res) => {
 };
 
 
-// ADMIN - UPDATE ORDER
+//  UPDATE ORDER
 const UpdateOrder = async (req, res) => {
     try {
 
@@ -664,5 +721,114 @@ const UpdateOrder = async (req, res) => {
     }
 };
 
+// GET SINGLE ORDER - ADMIN 
+// // ========================================================= 
+const GetAdminSingleOrder = async (req, res) => { 
+  try { 
+    const { id } = req.params; 
+    const order = await OrderSchema.findById(id) 
+    .populate("user", "name email"); 
+    
+    if (!order) { 
+      return res.status(404).json({ 
+        message: "Order not found", 
+      }); 
+    } 
+    res.status(200).json({ 
+    message: "Order fetched successfully", 
+    order, 
+  }); 
+} 
+catch (err) { 
+  console.log(err); 
+  res.status(500).json({ 
+    message: "Server error", 
+    error: err.message, 
+  }); 
+} 
+};
 
-module.exports = { CreateOrder, GetMyOrders, GetSavedAddresses, GetSingleOrder, CancelOrder, UpdateOrder };
+// =====================================================
+// CANCEL ORDER - ADMIN
+// =====================================================
+
+const AdminCancelOrder = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const { reason, comment } = req.body;
+
+    // -------------------------
+    // VALIDATION
+    // -------------------------
+
+    if (!reason) {
+      return res.status(400).json({
+        message: "Cancellation reason is required",
+      });
+    }
+
+    // -------------------------
+    // FIND ORDER
+    // -------------------------
+
+    const order = await OrderSchema.findById(id);
+
+    if (!order) {
+      return res.status(404).json({
+        message: "Order not found",
+      });
+    }
+
+    // -------------------------
+    // CHECK STATUS
+    // -------------------------
+
+    if (
+      order.orderStatus === "Shipped" ||
+      order.orderStatus === "Delivered" ||
+      order.orderStatus === "Cancelled"
+    ) {
+      return res.status(400).json({
+        message: "Order cannot be cancelled",
+      });
+    }
+
+    // -------------------------
+    // CANCEL ORDER
+    // -------------------------
+
+    order.orderStatus = "Cancelled";
+
+    order.cancellation = {
+      reason,
+      comment: comment || "",
+      cancelledAt: new Date(),
+      cancelledBy: "admin",
+    };
+
+    await order.save();
+
+    // -------------------------
+    // RESPONSE
+    // -------------------------
+
+    res.status(200).json({
+      message: "Order cancelled successfully",
+      order,
+    });
+
+  } catch (err) {
+    console.log(err);
+
+    res.status(500).json({
+      message: "Server error",
+      error: err.message,
+    });
+  }
+};
+
+
+module.exports = { CreateOrder, GetMyOrders, GetSavedAddresses, GetSingleOrder, CancelOrder, GetAllOrders, UpdateOrder,
+  GetAdminSingleOrder, AdminCancelOrder
+ };

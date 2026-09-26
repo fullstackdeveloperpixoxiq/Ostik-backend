@@ -1,6 +1,8 @@
 const ReviewSchema = require("../models/ReviewSchema");
 const OrderSchema = require("../models/OrderSchema");
 const ProductSchema = require("../models/ProductSchema");
+const cloudinary= require("../Config/Cloudinary");
+const { promises } = require("nodemailer/lib/xoauth2");
 
 
 // ======================================================
@@ -80,12 +82,48 @@ const CreateReview = async (req, res) => {
             });
         }
 
+        //upload review image to cloudinary
+        let uploadedImage= [];
+
+        if(req.files || req.files.length > 0){
+            uploadedImage= await Promise.all(
+                req.files.map((file)=>{
+                    return new Promise(
+                        (resolve, reject)=>{
+                            const stream=
+                            cloudinary.uploader.upload_stream(
+                                {
+                                    folder: "ostik/reviews",
+                                    resource_type: "image"
+                                },
+                                (
+                                    error,
+                                    result
+                                )=>{
+                                    if(error){
+                                        reject(error)
+                                    }
+                                    else{
+                                        resolve(result.secure_url)
+                                    }
+                                }
+                            );
+                            stream.end(
+                                file.buffer
+                            )
+                        }
+                    )
+                })
+            )
+        }
+
         // Create review
         const review = await ReviewSchema.create({
             product,
             user: userId,
             order,
             rating,
+            images: uploadedImage,
             comment: comment || "",
             isVerifiedPurchase: true,
             isApproved: true
@@ -264,8 +302,8 @@ const GetAllReviews = async (req, res) => {
     try {
 
         const reviews = await ReviewSchema.find()
-            .populate("user", "name email")
-            .populate("product", "name")
+            .populate("user", "name email profileImage")
+            .populate("product", "name images")
             .populate("order")
             .sort({ createdAt: -1 });
 

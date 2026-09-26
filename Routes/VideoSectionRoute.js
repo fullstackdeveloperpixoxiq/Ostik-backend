@@ -1,13 +1,17 @@
 const express = require("express");
 const router = express.Router();
-const {createVideoSection,getVideoSection,updateVideoSection,deleteVideoSection,} = require("../Controller/VideoSectionController");
+const {createVideoSection,getVideoSection,updateVideoSection,deleteVideoSection, getAdminVideoSection,} = require("../Controller/VideoSectionController");
 const upload = require("../Middleware/Upload");
+const authMiddleware = require("../Middleware/AuthMiddleware");
+const AdminMiddleware = require("../Middleware/AdminMiddleware");
 
 
-
-router.post("/", upload.single("video"), createVideoSection);
 router.get("/", getVideoSection);
-router.put("/", upload.single("video"), updateVideoSection);
+
+//admin
+router.get("/admin",authMiddleware,AdminMiddleware,getAdminVideoSection);
+router.post("/admin",authMiddleware,AdminMiddleware, upload.single("video"),createVideoSection);
+router.put("/admin/:id", upload.single("video"), updateVideoSection);
 router.delete("/", deleteVideoSection);
 
 
