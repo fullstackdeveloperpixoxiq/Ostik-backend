@@ -31,7 +31,7 @@ const allowedOrigins= [
     "https://ostik-frontend.vercel.app",
     "https://ostik.in",
     "https://www.ostik.in",
-    "https://ostik-admin.vercel.app/"
+    "https://ostik-admin.vercel.app"
 
 ]
 
