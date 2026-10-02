@@ -697,7 +697,7 @@ const GetLimitedStockProducts = async (req, res) => {
   try {
     // 1. Low stock variants find cheyyuka
     const lowStockVariants = await Variant.find({
-      stock: { $gt: 0, $lte: 5 },
+      stock: { $gt: 0, $lte: 15 },
       isActive: true,
     })
       .sort({ stock: 1 })
