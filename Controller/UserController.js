@@ -26,116 +26,43 @@ const RegiterUser = async (req, res) => {
         const normalizedName = name.trim();
 
         // =====================================================
-        // CHECK EXISTING USER
+        // CHECK IF USER ALREADY EXISTS
         // =====================================================
 
         const existingUser = await UserSchema.findOne({
             email: normalizedEmail
         });
 
-        // =====================================================
-        // EXISTING USER
-        // =====================================================
-
         if (existingUser) {
 
-            // -------------------------------------------------
-            // Already verified
-            // -------------------------------------------------
-
+            // Already verified user
             if (existingUser.isEmailVerified) {
                 return res.status(409).json({
                     message: "An account with this email already exists."
                 });
             }
 
-            // -------------------------------------------------
-            // Existing but NOT verified
-            // Generate a fresh OTP
-            // -------------------------------------------------
-
-            console.log(
-                "Existing unverified user found:",
-                existingUser.email
-            );
-
-            // Invalidate previous unused OTPs
-            await OtpSchema.updateMany(
-                {
-                    user: existingUser._id,
-                    purpose: "emailVerification",
-                    isUsed: false
-                },
-                {
-                    isUsed: true
-                }
-            );
-
-            // Generate new OTP
-            const otp = Math.floor(
-                100000 + Math.random() * 900000
-            ).toString();
-
-            console.log(
-                "New registration OTP:",
-                otp
-            );
-
-            // Save OTP
-            await OtpSchema.create({
-                user: existingUser._id,
-                email: existingUser.email,
-                otp,
-                purpose: "emailVerification",
-                expiresAt: new Date(
-                    Date.now() + 10 * 60 * 1000
-                )
-            });
-
-            // Create transporter
-            const transporter = nodeMailer.createTransport({
-                service: "gmail",
-
-                auth: {
-                    user: process.env.Email_User,
-                    pass: process.env.Email_Pass
-                },
-
-                connectionTimeout: 10000,
-                greetingTimeout: 10000,
-                socketTimeout: 10000
-            });
-
-            console.log(
-                "Attempting to send OTP to:",
-                existingUser.email
-            );
-
-            // Send OTP
-            const mailInfo = await transporter.sendMail({
-                from: process.env.Email_User,
-                to: existingUser.email,
-                subject: "Your OSTIK Email Verification OTP",
-
-                text: `Your OSTIK verification OTP is ${otp}.
-
-This OTP is valid for 10 minutes.
-
-For your security, do not share this OTP with anyone.
-
-If you did not request this OTP, please ignore this email.`
-            });
-
-            console.log(
-                "OTP email sent successfully:",
-                mailInfo.messageId
-            );
-
-            return res.status(200).json({
-                message: "A new OTP has been sent to your email.",
-                userId: existingUser._id
+            // This handles old unverified users
+            // created by your previous registration flow.
+            return res.status(409).json({
+                message: "An incomplete registration already exists for this email. Please contact support or remove the old unverified account."
             });
         }
+
+        // =====================================================
+        // CHECK EXISTING PENDING REGISTRATION
+        // =====================================================
+
+        await OtpSchema.updateMany(
+            {
+                email: normalizedEmail,
+                purpose: "emailVerification",
+                isUsed: false
+            },
+            {
+                isUsed: true
+            }
+        );
 
         // =====================================================
         // HASH PASSWORD
@@ -144,21 +71,6 @@ If you did not request this OTP, please ignore this email.`
         const hashedPassword = await bcrypt.hash(
             password,
             10
-        );
-
-        // =====================================================
-        // CREATE USER
-        // =====================================================
-
-        const user = await UserSchema.create({
-            name: normalizedName,
-            email: normalizedEmail,
-            password: hashedPassword
-        });
-
-        console.log(
-            "User created:",
-            user._id.toString()
         );
 
         // =====================================================
@@ -175,21 +87,35 @@ If you did not request this OTP, please ignore this email.`
         );
 
         // =====================================================
-        // SAVE OTP
+        // SAVE OTP + TEMPORARY REGISTRATION DATA
         // =====================================================
 
-        await OtpSchema.create({
-            user: user._id,
-            email: user.email,
+        const otpRecord = await OtpSchema.create({
+
+            // No User exists yet
+            user: undefined,
+
+            email: normalizedEmail,
+
             otp,
+
             purpose: "emailVerification",
+
             expiresAt: new Date(
                 Date.now() + 10 * 60 * 1000
-            )
+            ),
+
+            isUsed: false,
+
+            registrationData: {
+                name: normalizedName,
+                password: hashedPassword
+            }
         });
 
         console.log(
-            "OTP saved to database"
+            "Registration OTP saved:",
+            otpRecord._id.toString()
         );
 
         // =====================================================
@@ -205,7 +131,6 @@ If you did not request this OTP, please ignore this email.`
                 pass: process.env.Email_Pass
             },
 
-            // Prevent request from hanging forever
             connectionTimeout: 10000,
             greetingTimeout: 10000,
             socketTimeout: 10000
@@ -213,7 +138,7 @@ If you did not request this OTP, please ignore this email.`
 
         console.log(
             "Attempting to send registration OTP to:",
-            user.email
+            normalizedEmail
         );
 
         // =====================================================
@@ -224,7 +149,7 @@ If you did not request this OTP, please ignore this email.`
 
             from: process.env.Email_User,
 
-            to: user.email,
+            to: normalizedEmail,
 
             subject: "Your OSTIK Email Verification OTP",
 
@@ -243,7 +168,7 @@ If you did not request this OTP, please ignore this email.`
         );
 
         // =====================================================
-        // SUCCESS RESPONSE
+        // SUCCESS
         // =====================================================
 
         return res.status(201).json({
@@ -251,7 +176,7 @@ If you did not request this OTP, please ignore this email.`
             message:
                 "Registration successful. OTP sent to your email.",
 
-            userId: user._id
+            registrationId: otpRecord._id
         });
 
     } catch (error) {
@@ -264,168 +189,276 @@ If you did not request this OTP, please ignore this email.`
         return res.status(500).json({
 
             message:
-                "Registration failed. Please try again.",
-
-            error: error.message
+                "Unable to send verification email. Please try again."
         });
     }
 };
 
-const VerifyOTP= async(req,res)=>{ 
-    try{ 
-        const {userId,otp}= req.body; 
-        if(!userId || !otp){ 
-            return res.status(400).json({ 
-                message:"User ID and OTP are required" 
-            }) 
-        }; 
-        
-        //Find user 
-        const user= await UserSchema.findById(userId) 
-        if (!user) { 
-            return res.status(404).json({ 
-                message: "User not found" 
-            }); 
-        }; 
-        
-        //OTP verification 
-        const otpRecord= await OtpSchema.findOne({ 
-            user: userId, 
-            otp: otp, 
-            purpose: "emailVerification", 
-            isUsed: false 
-        }); 
-        
-        if (!otpRecord) { 
-            return res.status(400).json({ 
-                message: "Invalid or already used OTP" 
-            }); 
-        } 
-        
-        //check OTP expiration 
-        if(otpRecord.expiresAt < new Date()){ 
-            return res.status(400).json({ 
-                message: "OTP has expired" 
-            }); 
-        } 
-        
-        //verify user's email 
-        user.isEmailVerified = true; 
-        await user.save() 
-        
-        //check OTP as used 
-    otpRecord.isUsed= true 
-    
-    await otpRecord.save(); 
-    res.status(200).json({ 
-        message: "Email verified successfully" 
-    }); 
-} catch(error){ 
-    console.log(error); 
-    res.status(500).json({ 
-        message: "Server error", error: error.message 
-    }); 
-} 
-}
+const VerifyOTP = async (req, res) => {
 
-
-const ResendOTP = async (req, res) => {
     try {
-        const { userId } = req.body;
 
-        // Check userId
-        if (!userId) {
+        const { registrationId, otp } = req.body;
+
+        // =====================================================
+        // VALIDATION
+        // =====================================================
+
+        if (!registrationId || !otp) {
             return res.status(400).json({
-                message: "User ID is required"
+                message: "Registration ID and OTP are required"
             });
         }
 
-        // Find user
-        const user = await UserSchema.findById(userId);
+        // =====================================================
+        // FIND OTP RECORD
+        // =====================================================
 
-        if (!user) {
-            return res.status(404).json({
-                message: "User not found"
-            });
-        }
+        const otpRecord = await OtpSchema.findOne({
+            _id: registrationId,
+            otp: otp,
+            purpose: "emailVerification",
+            isUsed: false
+        });
 
-        // Check email verification
-        if (user.isEmailVerified) {
+        if (!otpRecord) {
             return res.status(400).json({
-                message: "Email is already verified"
+                message: "Invalid or already used OTP"
             });
         }
 
-        // Invalidate all previous unused OTPs
-        await OtpSchema.updateMany(
-            {
-                user: userId,
-                purpose: "emailVerification",
-                isUsed: false
-            },
-            {
-                isUsed: true
-            }
+        // =====================================================
+        // CHECK OTP EXPIRATION
+        // =====================================================
+
+        if (otpRecord.expiresAt < new Date()) {
+
+            return res.status(400).json({
+                message: "OTP has expired"
+            });
+        }
+
+        // =====================================================
+        // CHECK REGISTRATION DATA
+        // =====================================================
+
+        if (
+            !otpRecord.registrationData ||
+            !otpRecord.registrationData.name ||
+            !otpRecord.registrationData.password
+        ) {
+
+            return res.status(400).json({
+                message: "Registration data not found. Please register again."
+            });
+        }
+
+        // =====================================================
+        // CHECK IF USER WAS CREATED IN THE MEANTIME
+        // =====================================================
+
+        const existingUser = await UserSchema.findOne({
+            email: otpRecord.email
+        });
+
+        if (existingUser) {
+
+            return res.status(409).json({
+                message: "An account with this email already exists."
+            });
+        }
+
+        // =====================================================
+        // CREATE USER ONLY AFTER OTP VERIFICATION
+        // =====================================================
+
+        const user = await UserSchema.create({
+
+            name: otpRecord.registrationData.name,
+
+            email: otpRecord.email,
+
+            password: otpRecord.registrationData.password,
+
+            role: "user",
+
+            isEmailVerified: true,
+
+            isActive: true
+        });
+
+        console.log(
+            "User created after OTP verification:",
+            user._id.toString()
         );
 
-        // Generate new OTP
-        const otp = Math.floor(
+        // =====================================================
+        // MARK OTP AS USED
+        // =====================================================
+
+        otpRecord.isUsed = true;
+
+        await otpRecord.save();
+
+        // =====================================================
+        // SUCCESS
+        // =====================================================
+
+        return res.status(200).json({
+
+            message: "Email verified successfully"
+        });
+
+    } catch (error) {
+
+        console.error(
+            "VERIFY OTP ERROR:",
+            error
+        );
+
+        return res.status(500).json({
+            message: "Server error"
+        });
+    }
+};
+
+const ResendOTP = async (req, res) => {
+
+    try {
+
+        const { registrationId } = req.body;
+
+        // =====================================================
+        // VALIDATION
+        // =====================================================
+
+        if (!registrationId) {
+            return res.status(400).json({
+                message: "Registration ID is required"
+            });
+        }
+
+        // =====================================================
+        // FIND EXISTING REGISTRATION OTP
+        // =====================================================
+
+        const existingOtp = await OtpSchema.findOne({
+            _id: registrationId,
+            purpose: "emailVerification"
+        });
+
+        if (!existingOtp) {
+
+            return res.status(404).json({
+                message: "Registration not found. Please register again."
+            });
+        }
+
+        // =====================================================
+        // CHECK IF ALREADY USED
+        // =====================================================
+
+        if (existingOtp.isUsed) {
+
+            return res.status(400).json({
+                message: "This registration has already been completed."
+            });
+        }
+
+        // =====================================================
+        // GENERATE NEW OTP
+        // =====================================================
+
+        const newOtp = Math.floor(
             100000 + Math.random() * 900000
         ).toString();
 
-        console.log("New OTP generated:", otp);
-        console.log("Sending OTP to:", user.email);
+        console.log(
+            "New registration OTP:",
+            newOtp
+        );
 
-        // Save new OTP
-        await OtpSchema.create({
-            user: user._id,
-            email: user.email,
-            otp,
-            purpose: "emailVerification",
-            expiresAt: new Date(
-                Date.now() + 1 * 60 * 1000
-            )
-        });
+        // =====================================================
+        // UPDATE OTP
+        // =====================================================
 
-        // Create transporter
+        existingOtp.otp = newOtp;
+
+        existingOtp.expiresAt = new Date(
+            Date.now() + 10 * 60 * 1000
+        );
+
+        await existingOtp.save();
+
+        // =====================================================
+        // CREATE EMAIL TRANSPORTER
+        // =====================================================
+
         const transporter = nodeMailer.createTransport({
+
             service: "gmail",
+
             auth: {
                 user: process.env.Email_User,
                 pass: process.env.Email_Pass
-            }
+            },
+
+            connectionTimeout: 10000,
+            greetingTimeout: 10000,
+            socketTimeout: 10000
         });
 
-        // Send email
-        const mailInfo = await transporter.sendMail({
-            from: process.env.Email_User,
-            to: user.email,
-            subject: "Your OSTIK Email Verification OTP",
-            text: `Your OSTIK verification OTP is ${otp}.
+        // =====================================================
+        // SEND OTP
+        // =====================================================
 
-This OTP is valid for 1 minute.
+        const mailInfo = await transporter.sendMail({
+
+            from: process.env.Email_User,
+
+            to: existingOtp.email,
+
+            subject: "Your OSTIK Email Verification OTP",
+
+            text: `Your OSTIK verification OTP is ${newOtp}.
+
+This OTP is valid for 10 minutes.
 
 For your security, do not share this OTP with anyone.
 
 If you did not request this OTP, please ignore this email.`
         });
 
-        console.log("OTP email sent successfully:", mailInfo.messageId);
+        console.log(
+            "OTP email sent successfully:",
+            mailInfo.messageId
+        );
 
-        res.status(200).json({
-            message: "A new OTP has been sent to your email."
+        // =====================================================
+        // SUCCESS
+        // =====================================================
+
+        return res.status(200).json({
+
+            message:
+                "A new OTP has been sent to your email.",
+
+            registrationId: existingOtp._id
         });
 
     } catch (error) {
-        console.log("Resend OTP error:", error);
 
-        res.status(500).json({
-            message: "Server error",
-            error: error.message
+        console.error(
+            "RESEND OTP ERROR:",
+            error
+        );
+
+        return res.status(500).json({
+            message:
+                "Unable to send OTP. Please try again."
         });
     }
 };
-
 
 const LoginUser= async (req,res)=>{
     try{

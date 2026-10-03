@@ -4,7 +4,7 @@ const otpSchema = new mongoose.Schema({
   user: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "User",
-    required: true,
+    required: false,
   },
 
   email: {
@@ -34,6 +34,15 @@ const otpSchema = new mongoose.Schema({
     type: Boolean,
     default: false,
   },
+
+  registrationData: {
+    name: {
+        type: String,
+    },
+    password: {
+        type: String,
+    },
+},
   
   createdAt: {
     type: Date,
