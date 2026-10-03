@@ -7,74 +7,269 @@ const mongoose= require("mongoose");
 const cloudinary= require("../Config/Cloudinary")
 require("dotenv").config()
 
-const RegiterUser= async(req,res)=>{ 
-    try{ 
-    const {name,email,password}= req.body; 
+const RegiterUser = async (req, res) => {
+    try {
 
-    //check all fields are required 
-    if(!name || !email || !password){ 
-        return res.status(400).json(
-            { message: "All fields are required" }) 
-        }; 
+        const { name, email, password } = req.body;
 
-        //check existing user 
-        const existingUser= await UserSchema.findOne({email}); 
-        if(existingUser){ return res.status(200).json(
-            { message: "User already exist" }) 
-        }; 
+        // =====================================================
+        // VALIDATION
+        // =====================================================
 
+        if (!name || !email || !password) {
+            return res.status(400).json({
+                message: "All fields are required"
+            });
+        }
 
-        //hash password 
-        const hashedPassword= await bcrypt.hash(password,10); 
+        const normalizedEmail = email.trim().toLowerCase();
+        const normalizedName = name.trim();
 
-        //user creation 
-        const user= await UserSchema.create({ 
-            name, 
-            email, 
-            password: hashedPassword 
-        }); 
-        
+        // =====================================================
+        // CHECK EXISTING USER
+        // =====================================================
 
-        //generate 6 digit OTP (100000-900000) 
-        const otp= Math.floor(100000 + Math.random() * 900000).toString(); 
+        const existingUser = await UserSchema.findOne({
+            email: normalizedEmail
+        });
 
-        //save the OTP 
-        await OtpSchema.create({ 
-            user: user._id, 
-            email: user.email, 
-            otp, 
-            purpose: "emailVerification", 
-            expiresAt: new Date(Date.now() + 10*60*1000) 
-        }); 
-        
-        //email tranporter 
-        const transporter= nodeMailer.createTransport({ 
-            service: "gmail", 
-            auth: { user: process.env.Email_User, pass: process.env.Email_Pass } 
-        }); 
+        // =====================================================
+        // EXISTING USER
+        // =====================================================
 
-        //send otp 
-        await transporter.sendMail({ 
-            from: process.env.Email_User, 
-            to: email, 
-            subject: "Email Verification OTP", 
-            text: `Your OTP is ${otp}, It will expires in 10 mins` 
-        }); 
-        
-        //response 
-        res.status(201).
-        json({ message: "Registration successful. OTP sent to your email.", 
-            userId: user._id, 
-        }); 
-    } 
-    catch(error){ 
-        console.log(error); 
-        res.status(500).json({ message:"server error", 
-            error: error.message 
-        }) 
-    } 
-}
+        if (existingUser) {
 
+            // -------------------------------------------------
+            // Already verified
+            // -------------------------------------------------
+
+            if (existingUser.isEmailVerified) {
+                return res.status(409).json({
+                    message: "An account with this email already exists."
+                });
+            }
+
+            // -------------------------------------------------
+            // Existing but NOT verified
+            // Generate a fresh OTP
+            // -------------------------------------------------
+
+            console.log(
+                "Existing unverified user found:",
+                existingUser.email
+            );
+
+            // Invalidate previous unused OTPs
+            await OtpSchema.updateMany(
+                {
+                    user: existingUser._id,
+                    purpose: "emailVerification",
+                    isUsed: false
+                },
+                {
+                    isUsed: true
+                }
+            );
+
+            // Generate new OTP
+            const otp = Math.floor(
+                100000 + Math.random() * 900000
+            ).toString();
+
+            console.log(
+                "New registration OTP:",
+                otp
+            );
+
+            // Save OTP
+            await OtpSchema.create({
+                user: existingUser._id,
+                email: existingUser.email,
+                otp,
+                purpose: "emailVerification",
+                expiresAt: new Date(
+                    Date.now() + 10 * 60 * 1000
+                )
+            });
+
+            // Create transporter
+            const transporter = nodeMailer.createTransport({
+                service: "gmail",
+
+                auth: {
+                    user: process.env.Email_User,
+                    pass: process.env.Email_Pass
+                },
+
+                connectionTimeout: 10000,
+                greetingTimeout: 10000,
+                socketTimeout: 10000
+            });
+
+            console.log(
+                "Attempting to send OTP to:",
+                existingUser.email
+            );
+
+            // Send OTP
+            const mailInfo = await transporter.sendMail({
+                from: process.env.Email_User,
+                to: existingUser.email,
+                subject: "Your OSTIK Email Verification OTP",
+
+                text: `Your OSTIK verification OTP is ${otp}.
+
+This OTP is valid for 10 minutes.
+
+For your security, do not share this OTP with anyone.
+
+If you did not request this OTP, please ignore this email.`
+            });
+
+            console.log(
+                "OTP email sent successfully:",
+                mailInfo.messageId
+            );
+
+            return res.status(200).json({
+                message: "A new OTP has been sent to your email.",
+                userId: existingUser._id
+            });
+        }
+
+        // =====================================================
+        // HASH PASSWORD
+        // =====================================================
+
+        const hashedPassword = await bcrypt.hash(
+            password,
+            10
+        );
+
+        // =====================================================
+        // CREATE USER
+        // =====================================================
+
+        const user = await UserSchema.create({
+            name: normalizedName,
+            email: normalizedEmail,
+            password: hashedPassword
+        });
+
+        console.log(
+            "User created:",
+            user._id.toString()
+        );
+
+        // =====================================================
+        // GENERATE OTP
+        // =====================================================
+
+        const otp = Math.floor(
+            100000 + Math.random() * 900000
+        ).toString();
+
+        console.log(
+            "Registration OTP generated:",
+            otp
+        );
+
+        // =====================================================
+        // SAVE OTP
+        // =====================================================
+
+        await OtpSchema.create({
+            user: user._id,
+            email: user.email,
+            otp,
+            purpose: "emailVerification",
+            expiresAt: new Date(
+                Date.now() + 10 * 60 * 1000
+            )
+        });
+
+        console.log(
+            "OTP saved to database"
+        );
+
+        // =====================================================
+        // CREATE EMAIL TRANSPORTER
+        // =====================================================
+
+        const transporter = nodeMailer.createTransport({
+
+            service: "gmail",
+
+            auth: {
+                user: process.env.Email_User,
+                pass: process.env.Email_Pass
+            },
+
+            // Prevent request from hanging forever
+            connectionTimeout: 10000,
+            greetingTimeout: 10000,
+            socketTimeout: 10000
+        });
+
+        console.log(
+            "Attempting to send registration OTP to:",
+            user.email
+        );
+
+        // =====================================================
+        // SEND OTP
+        // =====================================================
+
+        const mailInfo = await transporter.sendMail({
+
+            from: process.env.Email_User,
+
+            to: user.email,
+
+            subject: "Your OSTIK Email Verification OTP",
+
+            text: `Your OSTIK verification OTP is ${otp}.
+
+This OTP is valid for 10 minutes.
+
+For your security, do not share this OTP with anyone.
+
+If you did not request this OTP, please ignore this email.`
+        });
+
+        console.log(
+            "OTP email sent successfully:",
+            mailInfo.messageId
+        );
+
+        // =====================================================
+        // SUCCESS RESPONSE
+        // =====================================================
+
+        return res.status(201).json({
+
+            message:
+                "Registration successful. OTP sent to your email.",
+
+            userId: user._id
+        });
+
+    } catch (error) {
+
+        console.error(
+            "REGISTRATION ERROR:",
+            error
+        );
+
+        return res.status(500).json({
+
+            message:
+                "Registration failed. Please try again.",
+
+            error: error.message
+        });
+    }
+};
 
 const VerifyOTP= async(req,res)=>{ 
     try{ 
