@@ -5,153 +5,6 @@ const ProductSchema = require("../models/ProductSchema");
 const VariantSchema = require("../models/VariantSchema"); 
 
 
-// CREATE ORDER
-// const CreateOrder = async (req, res) => {
-//     try {
-
-//         const userId = req.user.userId;
-
-//         const {
-//             shippingAddress,
-//             paymentMethod
-//         } = req.body;
-
-//         // Check required fields
-//         if (!shippingAddress || !paymentMethod) {
-//             return res.status(400).json({
-//                 message: "Shipping address and payment method are required"
-//             });
-//         }
-
-//         // Check payment method
-//         if (!["cod", "razorpay"].includes(paymentMethod)) {
-//             return res.status(400).json({
-//                 message: "Invalid payment method"
-//             });
-//         }
-
-//         // Find cart
-//         const cart = await CartSchema.findOne({
-//             user: userId
-//         });
-
-//         if (!cart || cart.items.length === 0) {
-//             return res.status(400).json({
-//                 message: "Cart is empty"
-//             });
-//         }
-
-//         // Create product snapshots
-//         const orderItems = [];
-
-//         let subtotal = 0;
-
-//         for (const cartItem of cart.items) {
-
-//             const product = await ProductSchema.findById(
-//                 cartItem.product
-//             );
-
-//             if (!product) {
-//                 return res.status(404).json({
-//                     message: "Product not found"
-//                 });
-//             }
-
-//             // Check stock
-//             if (product.stock < cartItem.quantity) {
-//                 return res.status(400).json({
-//                     message: `${product.name} is out of stock`
-//                 });
-//             }
-
-//             const price = product.basePrice;
-
-//             const itemTotal = price * cartItem.quantity;
-
-//             subtotal += itemTotal;
-
-//             orderItems.push({
-//                 product: product._id,
-//                 name: product.name,
-//                 price: price,
-//                 quantity: cartItem.quantity,
-//                 image: product.images?.[0] || ""
-//             });
-//         }
-
-//         // Shipping fee
-//         const shippingFee = 0;
-
-//         // Discount
-//         const discount = 0;
-
-//         // Total
-//         const total = subtotal - discount + shippingFee;
-
-//         // Create order
-//         const order = await OrderSchema.create({
-//             user: userId,
-
-//             shippingAddress,
-
-//             items: orderItems,
-
-//             paymentMethod,
-
-//             paymentStatus: "Pending",
-
-//             subtotal,
-
-//             discount,
-
-//             shippingFee,
-
-//             total,
-
-//             currency: "INR",
-
-//             exchangeRateUsed: 1,
-
-//             orderStatus: "Pending",
-
-//             placedAt: new Date()
-//         });
-
-//         // Reduce product stock
-//         for (const cartItem of cart.items) {
-
-//             await ProductSchema.findByIdAndUpdate(
-//                 cartItem.product,
-//                 {
-//                     $inc: {
-//                         stock: -cartItem.quantity
-//                     }
-//                 }
-//             );
-//         }
-
-//         // Clear cart
-//         cart.items = [];
-
-//         await cart.save();
-
-//         res.status(201).json({
-//             message: "Order created successfully",
-//             order
-//         });
-
-//     } catch (err) {
-
-//         console.log(err);
-
-//         res.status(500).json({
-//             message: "Server error",
-//             error: err.message
-//         });
-//     }
-// };
-
 const CreateOrder = async (req, res) => {
   try {
 
@@ -302,7 +155,6 @@ const CreateOrder = async (req, res) => {
         sku: variant.sku,
 
         image:
-          variant.images?.[0] ||
           product.images?.[0] ||
           "",
 
@@ -521,7 +373,7 @@ const GetSingleOrder = async (req, res) => {
         const order = await OrderSchema.findOne({
             _id: id,
             user: userId
-        });
+        }).populate("items.productId", "images");
 
         if (!order) {
             return res.status(404).json({
