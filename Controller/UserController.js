@@ -1,11 +1,17 @@
-const bcrypt= require("bcryptjs");
+const bcrypt = require("bcryptjs");
 const UserSchema = require("../models/UserSchema");
 const OtpSchema = require("../models/OtpSchema");
-const nodeMailer= require("nodemailer");
-const Jwt= require("jsonwebtoken");
-const mongoose= require("mongoose");
-const cloudinary= require("../Config/Cloudinary")
-require("dotenv").config()
+const Jwt = require("jsonwebtoken");
+const sendEmail = require("../Utils/SendEmail");
+const mongoose = require("mongoose");
+const cloudinary = require("../Config/Cloudinary");
+
+require("dotenv").config();
+
+
+// =========================================================
+// REGISTER USER
+// =========================================================
 
 const RegiterUser = async (req, res) => {
     try {
@@ -42,8 +48,7 @@ const RegiterUser = async (req, res) => {
                 });
             }
 
-            // This handles old unverified users
-            // created by your previous registration flow.
+            // Old unverified user
             return res.status(409).json({
                 message: "An incomplete registration already exists for this email. Please contact support or remove the old unverified account."
             });
@@ -119,40 +124,17 @@ const RegiterUser = async (req, res) => {
         );
 
         // =====================================================
-        // CREATE EMAIL TRANSPORTER
+        // SEND OTP USING BREVO
         // =====================================================
-
-        const transporter = nodeMailer.createTransport({
-
-            service: "gmail",
-
-            auth: {
-                user: process.env.Email_User,
-                pass: process.env.Email_Pass
-            },
-
-            connectionTimeout: 10000,
-            greetingTimeout: 10000,
-            socketTimeout: 10000
-        });
 
         console.log(
             "Attempting to send registration OTP to:",
             normalizedEmail
         );
 
-        // =====================================================
-        // SEND OTP
-        // =====================================================
-
-        const mailInfo = await transporter.sendMail({
-
-            from: process.env.Email_User,
-
+        await sendEmail({
             to: normalizedEmail,
-
             subject: "Your OSTIK Email Verification OTP",
-
             text: `Your OSTIK verification OTP is ${otp}.
 
 This OTP is valid for 10 minutes.
@@ -163,8 +145,7 @@ If you did not request this OTP, please ignore this email.`
         });
 
         console.log(
-            "OTP email sent successfully:",
-            mailInfo.messageId
+            "OTP email sent successfully"
         );
 
         // =====================================================
@@ -193,6 +174,11 @@ If you did not request this OTP, please ignore this email.`
         });
     }
 };
+
+
+// =========================================================
+// VERIFY REGISTRATION OTP
+// =========================================================
 
 const VerifyOTP = async (req, res) => {
 
@@ -322,6 +308,11 @@ const VerifyOTP = async (req, res) => {
     }
 };
 
+
+// =========================================================
+// RESEND REGISTRATION OTP
+// =========================================================
+
 const ResendOTP = async (req, res) => {
 
     try {
@@ -391,35 +382,12 @@ const ResendOTP = async (req, res) => {
         await existingOtp.save();
 
         // =====================================================
-        // CREATE EMAIL TRANSPORTER
+        // SEND OTP USING BREVO
         // =====================================================
 
-        const transporter = nodeMailer.createTransport({
-
-            service: "gmail",
-
-            auth: {
-                user: process.env.Email_User,
-                pass: process.env.Email_Pass
-            },
-
-            connectionTimeout: 10000,
-            greetingTimeout: 10000,
-            socketTimeout: 10000
-        });
-
-        // =====================================================
-        // SEND OTP
-        // =====================================================
-
-        const mailInfo = await transporter.sendMail({
-
-            from: process.env.Email_User,
-
+        await sendEmail({
             to: existingOtp.email,
-
             subject: "Your OSTIK Email Verification OTP",
-
             text: `Your OSTIK verification OTP is ${newOtp}.
 
 This OTP is valid for 10 minutes.
@@ -430,8 +398,7 @@ If you did not request this OTP, please ignore this email.`
         });
 
         console.log(
-            "OTP email sent successfully:",
-            mailInfo.messageId
+            "Resend OTP email sent successfully"
         );
 
         // =====================================================
@@ -460,42 +427,49 @@ If you did not request this OTP, please ignore this email.`
     }
 };
 
-const LoginUser= async (req,res)=>{
-    try{
-        const {email,password}= req.body;
 
-        //required field
-        if(!email || !password){
+// =========================================================
+// LOGIN
+// =========================================================
+
+const LoginUser = async (req, res) => {
+
+    try {
+
+        const { email, password } = req.body;
+
+        // Required fields
+        if (!email || !password) {
             return res.status(400).json({
-                message:"All field are required"
-            })
-        };
-
-        //find user
-        const user= await UserSchema.findOne({email});
-
-        if(!user){
-            return res.status(404).json({
-                message:"User not found."
-            })
+                message: "All field are required"
+            });
         }
 
-        //check email verified
-        if(!user.isEmailVerified){
-            return res.status(401).json({
-                message:"Please verify your email first"
-            })
-        };
+        // Find user
+        const user = await UserSchema.findOne({ email });
 
-         // 4. Check if account is active
+        if (!user) {
+            return res.status(404).json({
+                message: "User not found."
+            });
+        }
+
+        // Check email verified
+        if (!user.isEmailVerified) {
+            return res.status(401).json({
+                message: "Please verify your email first"
+            });
+        }
+
+        // Check account active
         if (!user.isActive) {
             return res.status(403).json({
                 message: "Your account is inactive"
             });
-        };
+        }
 
-        //compare password
-        const comparePassword= await bcrypt.compare(
+        // Compare password
+        const comparePassword = await bcrypt.compare(
             password,
             user.password
         );
@@ -504,23 +478,27 @@ const LoginUser= async (req,res)=>{
             return res.status(401).json({
                 message: "Invalid email or password"
             });
-        };
-
-        //create Jwt token
-        const token= Jwt.sign({
-            userId: user._id,
-            role: user.role
-        },
-        process.env.JWT_SECRET,
-        {
-            expiresIn: "7d"
         }
-    );
 
-      // 7. Response
+        // Create JWT token
+        const token = Jwt.sign(
+            {
+                userId: user._id,
+                role: user.role
+            },
+            process.env.JWT_SECRET,
+            {
+                expiresIn: "7d"
+            }
+        );
+
+        // Response
         res.status(200).json({
+
             message: "Login successful",
+
             token,
+
             user: {
                 id: user._id,
                 name: user.name,
@@ -529,199 +507,9 @@ const LoginUser= async (req,res)=>{
                 profileImage: user.profileImage
             }
         });
-    
-    }
-    catch(error){
-        console.log(error);
-
-        res.status(500).json({
-            message: "Server error",
-            error: error.message
-        });
-    }
-}
-
-
-const ForgotPassword= async(req,res)=>{
-    try{
-        const {email}= req.body;
-
-        if(!email){
-            return res.status(400).json({
-                message: "Email is required"
-            });
-        }
-
-        //find user
-        const user= await UserSchema.findOne({email});
-
-        if(!user){
-            return res.status(404).json({
-                message:"User not found"
-            })
-        };
-
-        //Generate OTP
-        const otp= Math.floor(100000 + Math.random() * 900000).toString();
-
-        await OtpSchema.create({
-            user: user._id,
-            email: user.email,
-            otp,
-            purpose: "forgotPassword",
-            expiresAt: new Date(Date.now() + 10*60*1000)
-        });
-
-        //create email transporter
-        const transporter= nodeMailer.createTransport({
-            service:"gmail",
-            auth:{
-                user: process.env.Email_User,
-                pass: process.env.Email_Pass
-            }
-        });
-
-        //send OTP
-        await transporter.sendMail({
-            from: process.env.Email_User,
-            to: email,
-            subject: "Password Reset OTP",
-            text: `Your password reset OTP is ${otp}. It will expire in 10 minutes.`
-        });
-
-        res.status(200).json({
-            message:"OTP send to your email",
-            userId: user._id
-        })
-    }
-    catch (error) {
-
-        console.log(error);
-
-        res.status(500).json({
-            message: "Server error",
-            error: error.message
-        });
-    }
-}
-
-const verifyForgotPasswordOTP= async (req,res)=>{
-    try{
-        const {userId,otp}= req.body;
-
-
-        // 1. Check required fields
-        if (!userId || !otp) {
-            return res.status(400).json({
-                message: "User ID and OTP are required"
-            });
-        };
-
-        //find user
-        const user= await UserSchema.findById(userId);
-
-        if(!user){
-            return res.status(404).json({
-                message:"User not found"
-            })
-        };
-
-        //find otp
-        const otpRecord= await OtpSchema.findOne({
-            user: userId,
-            otp: otp,
-            purpose: "forgotPassword",
-            isUsed: false
-        });
-
-         if (!otpRecord) {
-            return res.status(400).json({
-                message: "Invalid or already used OTP"
-            });
-        }
-
-        //check expiration
-        if(otpRecord.expiresAt < new Date()){
-            return res.status(400).json({
-                message: "OTP has expired"
-            });
-        }
-
-        //mark OTP as used
-        otpRecord.isUsed= true
-        await otpRecord.save();
-
-        return res.status(200).json({
-            message:"OTP verified successfully"
-        })
-    }
-     catch (error) {
-
-        console.log(error);
-
-        res.status(500).json({
-            message: "Server error",
-            error: error.message
-        });
-    }
-}
-
-
-const ResetPassword= async (req,res)=>{
-    try{
-        const {userId, newpassword}= req.body;
-
-        //all field are required
-        if(!userId || !newpassword){
-            return res.status(400).json({
-                message:"All fields are required"
-            })
-        }
-
-         // 2. Find user
-        const user = await UserSchema.findById(userId);
-
-        if (!user) {
-            return res.status(404).json({
-                message: "User not found"
-            });
-        }
-
-        //hash new password
-        const hashedPassword= await bcrypt.hash(
-            newpassword, 10
-        )
-
-        //update password
-        user.password = hashedPassword;
-
-        await user.save();
-
-        res.status(200).json({
-            message: "Password reset successfully"
-        });
-
-    }
-    catch (error) {
-
-        console.log(error);
-
-        res.status(500).json({
-            message: "Server error",
-            error: error.message
-        });
-    }
-}
-
-
-const ProtectedTest = async (req, res) => {
-    try {
-        res.status(200).json({
-            message: "You are authenticated",
-            user: req.user
-        });
 
     } catch (error) {
+
         console.log(error);
 
         res.status(500).json({
@@ -732,7 +520,233 @@ const ProtectedTest = async (req, res) => {
 };
 
 
+// =========================================================
+// FORGOT PASSWORD
+// =========================================================
+
+const ForgotPassword = async (req, res) => {
+
+    try {
+
+        const { email } = req.body;
+
+        if (!email) {
+            return res.status(400).json({
+                message: "Email is required"
+            });
+        }
+
+        // Find user
+        const user = await UserSchema.findOne({ email });
+
+        if (!user) {
+            return res.status(404).json({
+                message: "User not found"
+            });
+        }
+
+        // Generate OTP
+        const otp = Math.floor(
+            100000 + Math.random() * 900000
+        ).toString();
+
+        await OtpSchema.create({
+
+            user: user._id,
+
+            email: user.email,
+
+            otp,
+
+            purpose: "forgotPassword",
+
+            expiresAt: new Date(
+                Date.now() + 10 * 60 * 1000
+            )
+        });
+
+        // =====================================================
+        // SEND PASSWORD RESET OTP USING BREVO
+        // =====================================================
+
+        await sendEmail({
+            to: email,
+            subject: "Password Reset OTP",
+            text: `Your password reset OTP is ${otp}. It will expire in 10 minutes.`
+        });
+
+        res.status(200).json({
+
+            message: "OTP send to your email",
+
+            userId: user._id
+        });
+
+    } catch (error) {
+
+        console.log(error);
+
+        res.status(500).json({
+            message: "Server error",
+            error: error.message
+        });
+    }
+};
+
+
+// =========================================================
+// VERIFY FORGOT PASSWORD OTP
+// =========================================================
+
+const verifyForgotPasswordOTP = async (req, res) => {
+
+    try {
+
+        const { userId, otp } = req.body;
+
+        // Required fields
+        if (!userId || !otp) {
+            return res.status(400).json({
+                message: "User ID and OTP are required"
+            });
+        }
+
+        // Find user
+        const user = await UserSchema.findById(userId);
+
+        if (!user) {
+            return res.status(404).json({
+                message: "User not found"
+            });
+        }
+
+        // Find OTP
+        const otpRecord = await OtpSchema.findOne({
+            user: userId,
+            otp: otp,
+            purpose: "forgotPassword",
+            isUsed: false
+        });
+
+        if (!otpRecord) {
+            return res.status(400).json({
+                message: "Invalid or already used OTP"
+            });
+        }
+
+        // Check expiration
+        if (otpRecord.expiresAt < new Date()) {
+
+            return res.status(400).json({
+                message: "OTP has expired"
+            });
+        }
+
+        // Mark OTP as used
+        otpRecord.isUsed = true;
+
+        await otpRecord.save();
+
+        return res.status(200).json({
+            message: "OTP verified successfully"
+        });
+
+    } catch (error) {
+
+        console.log(error);
+
+        res.status(500).json({
+            message: "Server error",
+            error: error.message
+        });
+    }
+};
+
+
+// =========================================================
+// RESET PASSWORD
+// =========================================================
+
+const ResetPassword = async (req, res) => {
+
+    try {
+
+        const { userId, newpassword } = req.body;
+
+        // All fields required
+        if (!userId || !newpassword) {
+            return res.status(400).json({
+                message: "All fields are required"
+            });
+        }
+
+        // Find user
+        const user = await UserSchema.findById(userId);
+
+        if (!user) {
+            return res.status(404).json({
+                message: "User not found"
+            });
+        }
+
+        // Hash new password
+        const hashedPassword = await bcrypt.hash(
+            newpassword,
+            10
+        );
+
+        // Update password
+        user.password = hashedPassword;
+
+        await user.save();
+
+        res.status(200).json({
+            message: "Password reset successfully"
+        });
+
+    } catch (error) {
+
+        console.log(error);
+
+        res.status(500).json({
+            message: "Server error",
+            error: error.message
+        });
+    }
+};
+
+
+// =========================================================
+// PROTECTED TEST
+// =========================================================
+
+const ProtectedTest = async (req, res) => {
+
+    try {
+
+        res.status(200).json({
+            message: "You are authenticated",
+            user: req.user
+        });
+
+    } catch (error) {
+
+        console.log(error);
+
+        res.status(500).json({
+            message: "Server error",
+            error: error.message
+        });
+    }
+};
+
+
+// =========================================================
+// GET PROFILE
+// =========================================================
+
 const GetProfile = async (req, res) => {
+
     try {
 
         // Get logged-in user's ID from JWT
@@ -765,7 +779,12 @@ const GetProfile = async (req, res) => {
 };
 
 
+// =========================================================
+// UPDATE PROFILE
+// =========================================================
+
 const UpdateProfile = async (req, res) => {
+
     try {
 
         const userId = req.user.userId;
@@ -800,16 +819,17 @@ const UpdateProfile = async (req, res) => {
             user.preferredcurrency = preferredcurrency;
         }
 
-        //update profile image
-        if(req.file){
-             const uploadedImage = await new Promise(
+        // Update profile image
+        if (req.file) {
+
+            const uploadedImage = await new Promise(
                 (resolve, reject) => {
 
                     const stream =
                         cloudinary.uploader.upload_stream(
                             {
                                 folder: "ostik/profile",
-                                resource_type: "image",
+                                resource_type: "image"
                             },
 
                             (error, result) => {
@@ -824,20 +844,20 @@ const UpdateProfile = async (req, res) => {
                         );
 
                     stream.end(req.file.buffer);
-
-                    }
+                }
             );
 
-            // Save Cloudinary URL in MongoDB
+            // Save Cloudinary URL
             user.profileImage =
                 uploadedImage.secure_url;
-        
         }
 
         await user.save();
 
         res.status(200).json({
+
             message: "Profile updated successfully",
+
             user: {
                 id: user._id,
                 name: user.name,
@@ -859,8 +879,15 @@ const UpdateProfile = async (req, res) => {
     }
 };
 
+
+// =========================================================
+// ADD ADDRESS
+// =========================================================
+
 const AddAddress = async (req, res) => {
+
     try {
+
         const userId = req.user.userId;
 
         const {
@@ -899,7 +926,7 @@ const AddAddress = async (req, res) => {
             pincode
         };
 
-        // Add address to user's addresses array
+        // Add address
         user.addresses.push(newAddress);
 
         await user.save();
@@ -920,8 +947,15 @@ const AddAddress = async (req, res) => {
     }
 };
 
+
+// =========================================================
+// UPDATE ADDRESS
+// =========================================================
+
 const UpdateAddress = async (req, res) => {
+
     try {
+
         const userId = req.user.userId;
         const { addressId } = req.params;
 
@@ -977,9 +1011,14 @@ const UpdateAddress = async (req, res) => {
 };
 
 
+// =========================================================
+// DELETE ADDRESS
+// =========================================================
 
 const DeleteAddress = async (req, res) => {
+
     try {
+
         const userId = req.user.userId;
         const { addressId } = req.params;
 
@@ -1010,6 +1049,7 @@ const DeleteAddress = async (req, res) => {
         });
 
     } catch (error) {
+
         res.status(500).json({
             message: "Server error",
             error: error.message
@@ -1023,6 +1063,7 @@ const DeleteAddress = async (req, res) => {
 // =========================================================
 
 const GetCustomers = async (req, res) => {
+
     try {
 
         const customers = await UserSchema.find({
@@ -1053,6 +1094,7 @@ const GetCustomers = async (req, res) => {
 // =========================================================
 
 const GetCustomer = async (req, res) => {
+
     try {
 
         const { id } = req.params;
@@ -1090,6 +1132,7 @@ const GetCustomer = async (req, res) => {
 // =========================================================
 
 const CreateCustomer = async (req, res) => {
+
     try {
 
         console.log("CUSTOMER BODY:", req.body);
@@ -1130,16 +1173,21 @@ const CreateCustomer = async (req, res) => {
 
         // Create user object
         const customerData = {
+
             name: name.trim(),
+
             email: email.toLowerCase().trim(),
+
             password: hashedPassword,
+
             role: "user",
+
             country: country || "India",
+
             preferredcurrency:
                 preferredcurrency || "INR",
 
-            // Admin-created customers are considered
-            // email verified.
+            // Admin-created customers are considered verified
             isEmailVerified: true,
 
             isActive:
@@ -1148,7 +1196,7 @@ const CreateCustomer = async (req, res) => {
                     : isActive === "true"
         };
 
-        // Upload profile image if provided
+        // Upload profile image
         if (req.file) {
 
             const uploadedImage =
@@ -1160,6 +1208,7 @@ const CreateCustomer = async (req, res) => {
                                 folder: "ostik/profile",
                                 resource_type: "image"
                             },
+
                             (error, result) => {
 
                                 if (error) {
@@ -1189,8 +1238,10 @@ const CreateCustomer = async (req, res) => {
         delete safeCustomer.password;
 
         res.status(201).json({
+
             message:
                 "Customer created successfully",
+
             customer: safeCustomer
         });
 
@@ -1214,6 +1265,7 @@ const CreateCustomer = async (req, res) => {
 // =========================================================
 
 const UpdateCustomer = async (req, res) => {
+
     try {
 
         const { id } = req.params;
@@ -1303,6 +1355,7 @@ const UpdateCustomer = async (req, res) => {
         if (
             preferredcurrency !== undefined
         ) {
+
             customer.preferredcurrency =
                 preferredcurrency;
         }
@@ -1312,6 +1365,7 @@ const UpdateCustomer = async (req, res) => {
         // ---------------------------------------------
 
         if (isActive !== undefined) {
+
             customer.isActive =
                 isActive === "true" ||
                 isActive === true;
@@ -1335,6 +1389,7 @@ const UpdateCustomer = async (req, res) => {
                                     resource_type:
                                         "image"
                                 },
+
                                 (
                                     error,
                                     result
@@ -1367,8 +1422,10 @@ const UpdateCustomer = async (req, res) => {
         delete safeCustomer.password;
 
         res.status(200).json({
+
             message:
                 "Customer updated successfully",
+
             customer: safeCustomer
         });
 
@@ -1395,6 +1452,7 @@ const ToggleCustomerStatus = async (
     req,
     res
 ) => {
+
     try {
 
         const { id } = req.params;
@@ -1417,9 +1475,11 @@ const ToggleCustomerStatus = async (
         await customer.save();
 
         res.status(200).json({
+
             message: customer.isActive
                 ? "Customer activated successfully"
                 : "Customer deactivated successfully",
+
             isActive: customer.isActive
         });
 
@@ -1438,7 +1498,27 @@ const ToggleCustomerStatus = async (
 };
 
 
-module.exports = {RegiterUser, VerifyOTP, LoginUser,ForgotPassword, verifyForgotPasswordOTP, ResetPassword,
-    ProtectedTest, GetProfile, UpdateProfile, AddAddress, UpdateAddress, DeleteAddress, ResendOTP,
-    GetCustomers, GetCustomer, CreateCustomer, UpdateCustomer, ToggleCustomerStatus
-}
+// =========================================================
+// EXPORTS
+// =========================================================
+
+module.exports = {
+    RegiterUser,
+    VerifyOTP,
+    LoginUser,
+    ForgotPassword,
+    verifyForgotPasswordOTP,
+    ResetPassword,
+    ProtectedTest,
+    GetProfile,
+    UpdateProfile,
+    AddAddress,
+    UpdateAddress,
+    DeleteAddress,
+    ResendOTP,
+    GetCustomers,
+    GetCustomer,
+    CreateCustomer,
+    UpdateCustomer,
+    ToggleCustomerStatus
+};
