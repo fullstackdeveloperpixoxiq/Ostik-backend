@@ -285,9 +285,7 @@ const GetProduct = async (req, res) => {
 // ===============================
 const UpdateProduct = async (req, res) => {
   try {
-
     const { id } = req.params;
-
 
     const {
       name,
@@ -300,189 +298,254 @@ const UpdateProduct = async (req, res) => {
       status,
     } = req.body;
 
+    // =========================================
+    // FIND PRODUCT
+    // =========================================
 
     const product = await ProductSchema.findById(id);
 
-
     if (!product) {
-
       return res.status(404).json({
-
         message: "Product not found",
+      });
+    }
 
+    // =========================================
+    // CHECK DUPLICATE SLUG
+    // =========================================
+
+    if (slug && slug !== product.slug) {
+      const existingProduct = await ProductSchema.findOne({
+        slug,
+        _id: { $ne: id },
       });
 
-    }
-
-
-    // Check duplicate slug
-    if (slug && slug !== product.slug) {
-
-      const existingSlug =
-        await ProductSchema.findOne({
-
-          slug,
-
-          _id: {
-            $ne: id
-          },
-
-        });
-
-
-      if (existingSlug) {
-
+      if (existingProduct) {
         return res.status(400).json({
-
-          message:
-            "Product with this slug already exists",
-
+          message: "A product with this slug already exists",
         });
-
       }
-
     }
 
-
-    // Update text fields
+    // =========================================
+    // UPDATE BASIC PRODUCT DETAILS
+    // =========================================
 
     if (name !== undefined) {
       product.name = name;
     }
 
-
     if (slug !== undefined) {
       product.slug = slug;
     }
-
 
     if (description !== undefined) {
       product.description = description;
     }
 
-
     if (category !== undefined) {
       product.category = category;
     }
 
-
-    // Update specs
-
     if (specs !== undefined) {
-
-      product.specs =
-        typeof specs === "string"
-          ? JSON.parse(specs)
-          : specs;
-
+      try {
+        product.specs =
+          typeof specs === "string"
+            ? JSON.parse(specs)
+            : specs;
+      } catch (error) {
+        return res.status(400).json({
+          message: "Invalid specs data",
+        });
+      }
     }
-
-
-    // Update featured status
 
     if (isFeatured !== undefined) {
-
       product.isFeatured =
-        typeof isFeatured === "string"
-          ? isFeatured === "true"
-          : isFeatured;
-
+        isFeatured === true || isFeatured === "true";
     }
-
-
-    // Update new arrival status
 
     if (isNewArrival !== undefined) {
-
       product.isNewArrival =
-        typeof isNewArrival === "string"
-          ? isNewArrival === "true"
-          : isNewArrival;
-
+        isNewArrival === true || isNewArrival === "true";
     }
-
-
-    // Update status
 
     if (status !== undefined) {
       product.status = status;
     }
 
-
-    // =================================
+    // =========================================
     // UPDATE PRODUCT IMAGES
-    // =================================
+    // =========================================
+
+    let existingImages = null;
+
+    /*
+      Frontend sends:
+      existingImages = JSON.stringify(existingImages)
+
+      Example:
+      [
+        "image1.jpg",
+        "image3.jpg"
+      ]
+
+      If image2 was removed using ×,
+      it will not be present here.
+    */
+
+    if (req.body.existingImages !== undefined) {
+      try {
+        existingImages = JSON.parse(
+          req.body.existingImages
+        );
+
+        if (!Array.isArray(existingImages)) {
+          return res.status(400).json({
+            message: "Invalid existingImages data",
+          });
+        }
+      } catch (error) {
+        return res.status(400).json({
+          message: "Invalid existingImages data",
+        });
+      }
+    }
+
+    // =========================================
+    // DELETE REMOVED IMAGES FROM CLOUDINARY
+    // =========================================
+
+    if (existingImages !== null) {
+      const removedImages = product.images.filter(
+        (oldImage) =>
+          !existingImages.includes(oldImage)
+      );
+
+      if (removedImages.length > 0) {
+        await Promise.all(
+          removedImages.map(async (imageUrl) => {
+            try {
+              /*
+                Cloudinary URL example:
+
+                https://res.cloudinary.com/xxx/image/upload/v1234567890/ostik/products/image.jpg
+
+                We need:
+                ostik/products/image
+              */
+
+              const match = imageUrl.match(
+                /\/upload\/(?:v\d+\/)?(.+?)(?:\.[^./]+)?$/
+              );
+
+              if (!match) {
+                console.log(
+                  "Could not extract Cloudinary public ID:",
+                  imageUrl
+                );
+                return;
+              }
+
+              const publicId = match[1];
+
+              console.log(
+                "Deleting Cloudinary image:",
+                publicId
+              );
+
+              await cloudinary.uploader.destroy(
+                publicId,
+                {
+                  resource_type: "image",
+                }
+              );
+            } catch (error) {
+              console.log(
+                "Failed to delete Cloudinary image:",
+                error.message
+              );
+            }
+          })
+        );
+      }
+    }
+
+    // =========================================
+    // UPLOAD NEW IMAGES
+    // =========================================
+
+    let uploadedImages = [];
 
     if (req.files && req.files.length > 0) {
-
-      const uploadedImages = await Promise.all(
-
+      uploadedImages = await Promise.all(
         req.files.map((file) => {
-
           return new Promise((resolve, reject) => {
-
             const stream =
               cloudinary.uploader.upload_stream(
-
                 {
                   folder: "ostik/products",
                   resource_type: "image",
                 },
-
                 (error, result) => {
-
                   if (error) {
                     reject(error);
                   } else {
                     resolve(result.secure_url);
                   }
-
                 }
-
               );
 
             stream.end(file.buffer);
-
           });
-
         })
-
       );
-
-
-      product.images = uploadedImages;
-
     }
 
+    // =========================================
+    // SAVE FINAL IMAGE ARRAY
+    // =========================================
+
+    /*
+      IMPORTANT:
+
+      This is OUTSIDE the req.files condition.
+
+      So even when user only removes an old image
+      and does not upload a new one,
+      MongoDB will still be updated.
+    */
+
+    if (existingImages !== null) {
+      product.images = [
+        ...existingImages,
+        ...uploadedImages,
+      ];
+    }
+
+    // =========================================
+    // SAVE PRODUCT
+    // =========================================
 
     await product.save();
 
+    // =========================================
+    // RESPONSE
+    // =========================================
 
     return res.status(200).json({
-
-      message:
-        "Product updated successfully",
-
+      message: "Product updated successfully",
       product,
-
     });
-
-
   } catch (err) {
-
-    console.log(err);
+    console.log("UpdateProduct Error:", err);
 
     return res.status(500).json({
-
       message: "Server error",
-
       error: err.message,
-
     });
-
   }
 };
-
 
 
 // ===============================

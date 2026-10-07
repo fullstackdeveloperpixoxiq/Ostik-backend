@@ -46,7 +46,7 @@ const GetDashboardStates= async(req,res)=>{
 
         //Low stock
         const LowstockProducts= await VariantSchema.countDocuments({
-            stock: {$lte:5},
+            stock: {$lte:15},
             isActive: true
         })
 
