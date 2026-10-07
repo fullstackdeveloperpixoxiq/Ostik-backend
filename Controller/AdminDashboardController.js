@@ -1187,7 +1187,7 @@ const GetAdminNotifications = async (req, res) => {
 
         time: order.createdAt,
 
-        href: "/ostik-admin/orders",
+        href: "/orders",
 
         icon: "solar:bag-4-line-duotone",
 
@@ -1214,7 +1214,7 @@ const GetAdminNotifications = async (req, res) => {
 
         time: contact.createdAt,
 
-        href: `/ostik-admin/contacts/${contact._id}`,
+        href: `/contacts/${contact._id}`,
 
         icon: "solar:letter-line-duotone",
 
@@ -1243,7 +1243,7 @@ const GetAdminNotifications = async (req, res) => {
 
         time: review.createdAt,
 
-        href: `/ostik-admin/reviews/${review._id}`,
+        href: `/reviews/${review._id}`,
 
         icon: "solar:star-line-duotone",
 
@@ -1272,7 +1272,7 @@ const GetAdminNotifications = async (req, res) => {
 
         time: variant.updatedAt,
 
-        href: `/ostik-admin/variants/${variant._id}`,
+        href: `/variants/${variant._id}`,
 
         icon: "solar:box-minimalistic-line-duotone",
 
