@@ -1,20 +1,22 @@
 const OrderSchema = require("../models/OrderSchema");
 const CartSchema = require("../models/CartSchema");
 const UserSchema = require("../models/UserSchema");
-const ProductSchema = require("../models/ProductSchema"); 
-const VariantSchema = require("../models/VariantSchema"); 
+const ProductSchema = require("../models/ProductSchema");
+const VariantSchema = require("../models/VariantSchema");
 
+
+// =====================================================
+// CREATE ORDER
+// =====================================================
 
 const CreateOrder = async (req, res) => {
   try {
-
     const userId = req.user.userId;
 
     const {
       shippingAddress,
       paymentMethod
     } = req.body;
-
 
     // -------------------------
     // VALIDATION
@@ -32,7 +34,6 @@ const CreateOrder = async (req, res) => {
       });
     }
 
-
     // -------------------------
     // FIND CART
     // -------------------------
@@ -47,7 +48,6 @@ const CreateOrder = async (req, res) => {
       });
     }
 
-
     // -------------------------
     // CREATE ORDER ITEMS
     // -------------------------
@@ -56,7 +56,6 @@ const CreateOrder = async (req, res) => {
 
     let subtotal = 0;
     let totalDiscount = 0;
-
 
     for (const cartItem of cart.items) {
 
@@ -71,7 +70,6 @@ const CreateOrder = async (req, res) => {
         });
       }
 
-
       // Find variant
       const variant = await VariantSchema.findById(
         cartItem.variant
@@ -83,7 +81,6 @@ const CreateOrder = async (req, res) => {
         });
       }
 
-
       // Check variant belongs to product
       if (
         variant.product.toString() !==
@@ -94,14 +91,12 @@ const CreateOrder = async (req, res) => {
         });
       }
 
-
       // Check variant active
       if (!variant.isActive) {
         return res.status(400).json({
           message: `${product.name} variant is inactive`
         });
       }
-
 
       // Check stock
       if (variant.stock < cartItem.quantity) {
@@ -110,7 +105,6 @@ const CreateOrder = async (req, res) => {
         });
       }
 
-
       // -------------------------
       // PRICE CALCULATION
       // -------------------------
@@ -118,32 +112,30 @@ const CreateOrder = async (req, res) => {
       const price = Math.round(variant.price);
 
       const discountPercent =
-      Number(variant.discountPercent) || 0;
+        Number(variant.discountPercent) || 0;
 
       const discountAmount =
-        Math.round((price * discountPercent) / 100)
+        Math.round(
+          (price * discountPercent) / 100
+        );
 
       const finalPrice =
         price - discountAmount;
 
-
       // Item subtotal
       const itemTotal =
         finalPrice * cartItem.quantity;
-
 
       subtotal += itemTotal;
 
       totalDiscount +=
         discountAmount * cartItem.quantity;
 
-
       // -------------------------
       // ORDER ITEM SNAPSHOT
       // -------------------------
 
       orderItems.push({
-
         productId: product._id,
 
         variantId: variant._id,
@@ -155,8 +147,7 @@ const CreateOrder = async (req, res) => {
         sku: variant.sku,
 
         image:
-          product.images?.[0] ||
-          "",
+          product.images?.[0] || "",
 
         price: price,
 
@@ -177,20 +168,17 @@ const CreateOrder = async (req, res) => {
       });
     }
 
-
     // -------------------------
     // SHIPPING
     // -------------------------
 
     const shippingFee = 0;
 
-
     // -------------------------
     // DISCOUNT
     // -------------------------
 
     const discount = totalDiscount;
-
 
     // -------------------------
     // TOTAL
@@ -199,6 +187,16 @@ const CreateOrder = async (req, res) => {
     const total =
       subtotal + shippingFee;
 
+      //estimate calculation
+      const estimatedDeliveryFrom= new Date();
+      estimatedDeliveryFrom.setDate(
+        estimatedDeliveryFrom.getDate() + 4
+      );
+
+      const estimatedDeliveryTo= new Date();
+      estimatedDeliveryTo.setDate(
+        estimatedDeliveryTo.getDate() + 8
+      )
 
     // -------------------------
     // CREATE ORDER
@@ -207,65 +205,73 @@ const CreateOrder = async (req, res) => {
     const order = await OrderSchema.create({
 
       user: userId,
-
       shippingAddress,
-
       items: orderItems,
-
       paymentMethod,
-
       paymentStatus: "Pending",
-
       subtotal,
-
       discount,
-
       shippingFee,
-
+      shipping:{
+        carrier: "India Post",
+  trackingNumber: "",
+  shippedAt: null,
+  estimatedDeliveryFrom,
+  estimatedDeliveryTo,
+  trackingHistory: [
+    {
+      status: "Pending",
+      updatedAt: new Date(),
+      updatedBy: "system",
+    },
+  ],
+      },
       total,
-
       currency: "INR",
-
       exchangeRateUsed: 1,
-
       orderStatus: "Pending",
+
 
       placedAt: new Date()
     });
 
-    // ================================================= 
-    // COD ONLY // Reduce stock and clear cart immediately
-    // ================================================= 
-    if (paymentMethod === "cod") { 
-      for (const cartItem of cart.items) { 
-        await VariantSchema.findByIdAndUpdate( 
-          cartItem.variant, 
-          { $inc: 
-            { stock: -cartItem.quantity, 
-            }, 
-          } 
-        ); 
-        }
+    // =================================================
+    // COD ONLY
+    // Reduce stock and clear cart immediately
+    // =================================================
 
+    if (paymentMethod === "cod") {
 
-        // Clear cart 
-      cart.items = []; 
-      await cart.save(); 
+      for (const cartItem of cart.items) {
+
+        await VariantSchema.findByIdAndUpdate(
+          cartItem.variant,
+          {
+            $inc: {
+              stock: -cartItem.quantity
+            }
+          }
+        );
+      }
+
+      // Clear cart
+      cart.items = [];
+
+      await cart.save();
     }
 
+    // =================================================
+    // RAZORPAY
+    // =================================================
+    // For Razorpay:
+    // DO NOT reduce stock here.
+    // DO NOT clear cart here.
+    // These happen after successful payment verification.
+    // =================================================
 
-    // ================================================= 
-    // RAZORPAY 
-    // ================================================= 
-    // For Razorpay: 
-    // DO NOT reduce stock here. 
-    // DO NOT clear cart here. 
-    // These will happen only after 
-    // successful payment verification. 
-    // ================================================= 
-
-    return res.status(201).json({ 
-      message: "Order created successfully", order, 
+    return res.status(201).json({
+      message: "Order created successfully",
+      order
     });
 
   } catch (err) {
@@ -273,135 +279,155 @@ const CreateOrder = async (req, res) => {
     console.log(err);
 
     res.status(500).json({
-
       message: "Server error",
-
       error: err.message
-
     });
-
   }
 };
 
 
-
+// =====================================================
 // GET MY ORDERS
+// =====================================================
+
 const GetMyOrders = async (req, res) => {
-    try {
+  try {
 
-        const userId = req.user.userId;
+    const userId = req.user.userId;
 
-        const orders = await OrderSchema.find({
-            user: userId
-        })
-        .sort({ createdAt: -1 });
+    const orders = await OrderSchema.find({
+      user: userId
+    })
+      .sort({ createdAt: -1 });
 
-        res.status(200).json({
-            message: "Orders fetched successfully",
-            orders
-        });
+    res.status(200).json({
+      message: "Orders fetched successfully",
+      orders
+    });
 
-    } catch (err) {
+  } catch (err) {
 
-        console.log(err);
+    console.log(err);
 
-        res.status(500).json({
-            message: "Server error",
-            error: err.message
-        });
-    }
+    res.status(500).json({
+      message: "Server error",
+      error: err.message
+    });
+  }
 };
 
-// GET UNIQUE ADDRESSES FROM THE USER'S PREVIOUS ORDERS
+
+// =====================================================
+// GET UNIQUE ADDRESSES
+// =====================================================
+
 const GetSavedAddresses = async (req, res) => {
-    try {
-        const userId = req.user.userId;
+  try {
 
-        const orders = await OrderSchema.find({ user: userId })
-            .sort({ createdAt: -1 })
-            .select("shippingAddress");
+    const userId = req.user.userId;
 
-        const addresses = [];
-        const seen = new Set();
+    const orders = await OrderSchema.find({
+      user: userId
+    })
+      .sort({ createdAt: -1 })
+      .select("shippingAddress");
 
-        for (const order of orders) {
-            const address = order.shippingAddress;
+    const addresses = [];
+    const seen = new Set();
 
-            if (!address) continue;
+    for (const order of orders) {
 
-            const key = [
-                address.fullName,
-                address.phone,
-                address.address,
-                address.city,
-                address.state,
-                address.pincode,
-            ]
-                .map((value) => String(value || "").trim().toLowerCase())
-                .join("|");
+      const address = order.shippingAddress;
 
-            if (!seen.has(key)) {
-                seen.add(key);
-                addresses.push(address);
-            }
-        }
+      if (!address) continue;
 
-        res.status(200).json({
-            message: "Saved addresses fetched successfully",
-            addresses,
-        });
-    } catch (err) {
-        console.log(err);
+      const key = [
+        address.fullName,
+        address.phone,
+        address.address,
+        address.city,
+        address.state,
+        address.pincode,
+      ]
+        .map((value) =>
+          String(value || "")
+            .trim()
+            .toLowerCase()
+        )
+        .join("|");
 
-        res.status(500).json({
-            message: "Server error",
-            error: err.message,
-        });
+      if (!seen.has(key)) {
+
+        seen.add(key);
+
+        addresses.push(address);
+      }
     }
+
+    res.status(200).json({
+      message: "Saved addresses fetched successfully",
+      addresses,
+    });
+
+  } catch (err) {
+
+    console.log(err);
+
+    res.status(500).json({
+      message: "Server error",
+      error: err.message,
+    });
+  }
 };
 
 
-
+// =====================================================
 // GET SINGLE ORDER
+// =====================================================
+
 const GetSingleOrder = async (req, res) => {
-    try {
+  try {
 
-        const userId = req.user.userId;
+    const userId = req.user.userId;
 
-        const { id } = req.params;
+    const { id } = req.params;
 
-        const order = await OrderSchema.findOne({
-            _id: id,
-            user: userId
-        }).populate("items.productId", "images");
+    const order = await OrderSchema.findOne({
+      _id: id,
+      user: userId
+    })
+      .populate("items.productId", "images");
 
-        if (!order) {
-            return res.status(404).json({
-                message: "Order not found"
-            });
-        }
-
-        res.status(200).json({
-            message: "Order fetched successfully",
-            order
-        });
-
-    } catch (err) {
-
-        console.log(err);
-
-        res.status(500).json({
-            message: "Server error",
-            error: err.message
-        });
+    if (!order) {
+      return res.status(404).json({
+        message: "Order not found"
+      });
     }
+
+    res.status(200).json({
+      message: "Order fetched successfully",
+      order
+    });
+
+  } catch (err) {
+
+    console.log(err);
+
+    res.status(500).json({
+      message: "Server error",
+      error: err.message
+    });
+  }
 };
 
 
+// =====================================================
+// CANCEL ORDER - USER
+// =====================================================
 
-// CANCEL ORDER
 const CancelOrder = async (req, res) => {
   try {
+
     const userId = req.user.userId;
 
     const { id } = req.params;
@@ -460,11 +486,14 @@ const CancelOrder = async (req, res) => {
       cancelledBy: "user",
     };
 
-    await order.save();
+    // Add tracking history
+    order.shipping.trackingHistory.push({
+      status: "Cancelled",
+      updatedAt: new Date(),
+      updatedBy: "user"
+    });
 
-    // -------------------------
-    // RESPONSE
-    // -------------------------
+    await order.save();
 
     res.status(200).json({
       message: "Order cancelled successfully",
@@ -472,6 +501,7 @@ const CancelOrder = async (req, res) => {
     });
 
   } catch (err) {
+
     console.log(err);
 
     res.status(500).json({
@@ -481,148 +511,55 @@ const CancelOrder = async (req, res) => {
   }
 };
 
-// ADMIN 
+
+// =====================================================
+// GET ALL ORDERS - ADMIN
+// =====================================================
 
 const GetAllOrders = async (req, res) => {
-    try {
-
-        const orders = await OrderSchema.find({})
-            .populate("user", "name email")
-            .sort({ createdAt: -1 });
-
-        res.status(200).json({
-            message: "All orders fetched successfully",
-            orders
-        });
-
-    } catch (err) {
-
-        console.log(err);
-
-        res.status(500).json({
-            message: "Server error",
-            error: err.message
-        });
-    }
-};
-
-
-//  UPDATE ORDER
-const UpdateOrder = async (req, res) => {
-    try {
-
-        const { id } = req.params;
-
-        const {
-            orderStatus,
-            paymentStatus,
-            trackingNumber,
-            carrier,
-            estimatedDelivery
-        } = req.body;
-
-        // Find order
-        const order = await OrderSchema.findById(id);
-
-        if (!order) {
-            return res.status(404).json({
-                message: "Order not found"
-            });
-        }
-
-        // Update order status
-        if (orderStatus !== undefined) {
-            order.orderStatus = orderStatus;
-        }
-
-        // Update payment status
-        if (paymentStatus !== undefined) {
-            order.paymentStatus = paymentStatus;
-        }
-
-        // Update tracking number
-        if (trackingNumber !== undefined) {
-            order.trackingNumber = trackingNumber;
-        }
-
-        // Update carrier
-        if (carrier !== undefined) {
-            order.carrier = carrier;
-        }
-
-        // Update estimated delivery
-        if (estimatedDelivery !== undefined) {
-            order.estimatedDelivery = estimatedDelivery;
-        }
-
-        await order.save();
-
-        res.status(200).json({
-            message: "Order updated successfully",
-            order
-        });
-
-    } catch (err) {
-
-        console.log(err);
-
-        res.status(500).json({
-            message: "Server error",
-            error: err.message
-        });
-    }
-};
-
-// GET SINGLE ORDER - ADMIN 
-// // ========================================================= 
-const GetAdminSingleOrder = async (req, res) => { 
-  try { 
-    const { id } = req.params; 
-    const order = await OrderSchema.findById(id) 
-    .populate("user", "name email"); 
-    
-    if (!order) { 
-      return res.status(404).json({ 
-        message: "Order not found", 
-      }); 
-    } 
-    res.status(200).json({ 
-    message: "Order fetched successfully", 
-    order, 
-  }); 
-} 
-catch (err) { 
-  console.log(err); 
-  res.status(500).json({ 
-    message: "Server error", 
-    error: err.message, 
-  }); 
-} 
-};
-
-// =====================================================
-// CANCEL ORDER - ADMIN
-// =====================================================
-
-const AdminCancelOrder = async (req, res) => {
   try {
+
+    const orders = await OrderSchema.find({})
+      .populate("user", "name email")
+      .sort({ createdAt: -1 });
+
+    res.status(200).json({
+      message: "All orders fetched successfully",
+      orders
+    });
+
+  } catch (err) {
+
+    console.log(err);
+
+    res.status(500).json({
+      message: "Server error",
+      error: err.message
+    });
+  }
+};
+
+
+// =====================================================
+// UPDATE ORDER - ADMIN
+// =====================================================
+
+const UpdateOrder = async (req, res) => {
+  try {
+
     const { id } = req.params;
 
-    const { reason, comment } = req.body;
+    const {
+      orderStatus,
+      paymentStatus,
+      trackingNumber,
+      carrier,
+      estimatedDelivery,
+    } = req.body;
 
-    // -------------------------
-    // VALIDATION
-    // -------------------------
-
-    if (!reason) {
-      return res.status(400).json({
-        message: "Cancellation reason is required",
-      });
-    }
-
-    // -------------------------
+    // =====================================================
     // FIND ORDER
-    // -------------------------
+    // =====================================================
 
     const order = await OrderSchema.findById(id);
 
@@ -632,48 +569,168 @@ const AdminCancelOrder = async (req, res) => {
       });
     }
 
-    // -------------------------
-    // CHECK STATUS
-    // -------------------------
+    // =====================================================
+    // ADMIN MANAGEABLE ORDER STATUSES
+    // =====================================================
 
-    if (
-      order.orderStatus === "Shipped" ||
-      order.orderStatus === "Delivered" ||
-      order.orderStatus === "Cancelled"
-    ) {
-      return res.status(400).json({
-        message: "Order cannot be cancelled",
-      });
+    // Processing is included ONLY for old existing orders.
+    // New orders should use:
+    // Pending → Packed → Shipped → Delivered
+
+    const validOrderStatuses = [
+      "Pending",
+      "Processing",
+      "Packed",
+      "Shipped",
+      "Delivered",
+    ];
+
+    // =====================================================
+    // PAYMENT STATUSES
+    // =====================================================
+
+    const validPaymentStatuses = [
+      "Pending",
+      "Paid",
+      "Failed",
+      "Refunded",
+    ];
+
+    // =====================================================
+    // UPDATE ORDER STATUS
+    // =====================================================
+
+    if (orderStatus !== undefined) {
+
+      // Cancelled orders are permanently locked
+      if (order.orderStatus === "Cancelled") {
+        return res.status(400).json({
+          message:
+            "This order is already Cancelled and cannot be changed.",
+        });
+      }
+
+      // Return status is also locked
+      if (order.orderStatus === "Returned") {
+        return res.status(400).json({
+          message:
+            "This order has already been Returned and cannot be changed.",
+        });
+      }
+
+      // Validate status
+      if (!validOrderStatuses.includes(orderStatus)) {
+        return res.status(400).json({
+          message:
+            `Invalid order status: ${orderStatus}`,
+        });
+      }
+
+      const previousStatus =
+        order.orderStatus;
+
+      order.orderStatus =
+        orderStatus;
+
+      // ===================================================
+      // DELIVERY DATE
+      // ===================================================
+
+      if (
+  orderStatus === "Delivered" &&
+  !order.deliveredAt
+) {
+  order.deliveredAt = new Date();
+}
+
+      // ===================================================
+      // TRACKING HISTORY
+      // ===================================================
+
+      if (
+        previousStatus !==
+        orderStatus
+      ) {
+
+        order.shipping.trackingHistory.push({
+          status: orderStatus,
+          updatedAt: new Date(),
+          updatedBy: "admin"
+        });
+      }
     }
 
-    // -------------------------
-    // CANCEL ORDER
-    // -------------------------
+    // =====================================================
+    // UPDATE PAYMENT STATUS
+    // =====================================================
 
-    order.orderStatus = "Cancelled";
+    if (paymentStatus !== undefined) {
 
-    order.cancellation = {
-      reason,
-      comment: comment || "",
-      cancelledAt: new Date(),
-      cancelledBy: "admin",
-    };
+      if (
+        !validPaymentStatuses.includes(
+          paymentStatus
+        )
+      ) {
+
+        return res.status(400).json({
+          message:
+            `Invalid payment status: ${paymentStatus}`,
+        });
+      }
+
+      order.paymentStatus =
+        paymentStatus;
+    }
+
+    // =====================================================
+    // TRACKING NUMBER
+    // =====================================================
+
+    if (trackingNumber !== undefined) {
+
+      order.trackingNumber =
+        trackingNumber;
+    }
+
+    // =====================================================
+    // CARRIER
+    // =====================================================
+
+    if (carrier !== undefined) {
+
+      order.carrier =
+        carrier;
+    }
+
+    // =====================================================
+    // ESTIMATED DELIVERY
+    // =====================================================
+
+    if (
+      estimatedDelivery !== undefined
+    ) {
+
+      order.estimatedDelivery =
+        estimatedDelivery || null;
+    }
+
+    // =====================================================
+    // SAVE
+    // =====================================================
 
     await order.save();
 
-    // -------------------------
-    // RESPONSE
-    // -------------------------
-
-    res.status(200).json({
-      message: "Order cancelled successfully",
+    return res.status(200).json({
+      message:
+        "Order updated successfully",
       order,
     });
 
   } catch (err) {
+
     console.log(err);
 
-    res.status(500).json({
+    return res.status(500).json({
       message: "Server error",
       error: err.message,
     });
@@ -681,6 +738,166 @@ const AdminCancelOrder = async (req, res) => {
 };
 
 
-module.exports = { CreateOrder, GetMyOrders, GetSavedAddresses, GetSingleOrder, CancelOrder, GetAllOrders, UpdateOrder,
-  GetAdminSingleOrder, AdminCancelOrder
- };
+// =====================================================
+// GET SINGLE ORDER - ADMIN
+// =====================================================
+
+const GetAdminSingleOrder = async (
+  req,
+  res
+) => {
+
+  try {
+
+    const { id } =
+      req.params;
+
+    const order =
+      await OrderSchema.findById(id)
+        .populate(
+          "user",
+          "name email"
+        );
+
+    if (!order) {
+
+      return res.status(404).json({
+        message:
+          "Order not found",
+      });
+    }
+
+    res.status(200).json({
+      message:
+        "Order fetched successfully",
+      order,
+    });
+
+  } catch (err) {
+
+    console.log(err);
+
+    res.status(500).json({
+      message:
+        "Server error",
+      error:
+        err.message,
+    });
+  }
+};
+
+
+// =====================================================
+// CANCEL ORDER - ADMIN
+// =====================================================
+
+const AdminCancelOrder = async (req,res) => {
+
+  try {
+    const { id } = req.params;
+
+    const {
+      reason,
+      comment } = req.body;
+
+    // -------------------------
+    // VALIDATION
+    // -------------------------
+
+    if (!reason || !reason.trim()) {
+
+      return res.status(400).json({
+        message:
+          "Cancellation reason is required",
+      });
+    }
+
+    // -------------------------
+    // FIND ORDER
+    // -------------------------
+
+    const order =
+      await OrderSchema.findById(id);
+
+    if (!order) {
+
+      return res.status(404).json({
+        message:
+          "Order not found",
+      });
+    }
+
+    // -------------------------
+    // CHECK STATUS
+    // -------------------------
+
+    if (
+      order.orderStatus ===
+        "Shipped" ||
+      order.orderStatus ===
+        "Delivered" ||
+      order.orderStatus ===
+        "Cancelled"
+    ) {
+
+      return res.status(400).json({
+        message:
+          "Order cannot be cancelled",
+      });
+    }
+
+    // -------------------------
+    // CANCEL ORDER
+    // -------------------------
+
+    order.orderStatus =
+      "Cancelled";
+
+    order.cancellation = {
+      reason: reason.trim(),
+      comment: comment?.trim() || "",
+      cancelledAt: new Date(),
+      cancelledBy: "admin",
+    };
+
+    // Add tracking history
+    order.trackingHistory.push({
+
+      status: "Cancelled",
+      updatedAt: new Date(),
+      updatedBy: "admin"
+    });
+
+    await order.save();
+
+    res.status(200).json({
+      message:
+        "Order cancelled successfully",
+      order,
+    });
+
+  } catch (err) {
+
+    console.log(err);
+
+    res.status(500).json({
+      message:
+        "Server error",
+      error:
+        err.message,
+    });
+  }
+};
+
+
+module.exports = {
+  CreateOrder,
+  GetMyOrders,
+  GetSavedAddresses,
+  GetSingleOrder,
+  CancelOrder,
+  GetAllOrders,
+  UpdateOrder,
+  GetAdminSingleOrder,
+  AdminCancelOrder
+};

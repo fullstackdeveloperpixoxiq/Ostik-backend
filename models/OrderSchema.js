@@ -129,6 +129,7 @@ const orderSchema = new mongoose.Schema(
       enum: [
         "Pending",
         "Processing",
+        "Packed",
         "Shipped",
         "Delivered",
         "Returned",
@@ -167,24 +168,32 @@ const orderSchema = new mongoose.Schema(
   },
 },
 
-    trackingNumber: {
-      type: String,
-      default: "",
-    },
+    shipping: {
+      carrier:{
+        type: String,
+        default: "India Post"
+      },
+      trackingNumber: {
+        type: String,
+        default: ""
+      },
+      shippedAt: {
+        type: Date,
+        default:null
+      },
+      estimatedDeliveryFrom: {
+        type: Date,
+        default: null
+      },
+      estimatedDeliveryTo: {
+        type: Date,
+        default: null
+      },
+      trackingHistory: {
+        type: [mongoose.Schema.Types.Mixed],
+        default: []
+      },
 
-    carrier: {
-      type: String,
-      default: "",
-    },
-
-    estimatedDelivery: {
-      type: Date,
-      default: null,
-    },
-
-    trackingHistory: {
-      type: [mongoose.Schema.Types.Mixed],
-      default: [],
     },
 
     placedAt: {
