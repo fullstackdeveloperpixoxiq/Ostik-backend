@@ -224,10 +224,7 @@ const GetAdminVariant = async (
 // =========================================================
 // UPDATE VARIANT - ADMIN
 // =========================================================
-const UpdateVariant = async (
-  req,
-  res
-) => {
+const UpdateVariant = async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -238,10 +235,14 @@ const UpdateVariant = async (
       discountPercent,
       stock,
       isActive,
+      existingImages,
     } = req.body;
 
-    const variant =
-      await Variant.findById(id);
+    // =====================================================
+    // FIND VARIANT
+    // =====================================================
+
+    const variant = await Variant.findById(id);
 
     if (!variant) {
       return res.status(404).json({
@@ -250,31 +251,52 @@ const UpdateVariant = async (
     }
 
     // =====================================================
+    // EXISTING IMAGES
+    // =====================================================
+
+    let remainingImages = [];
+
+    if (existingImages !== undefined) {
+      try {
+        remainingImages = JSON.parse(existingImages);
+
+        // Make sure it is an array
+        if (!Array.isArray(remainingImages)) {
+          return res.status(400).json({
+            message: "Invalid existing image data",
+          });
+        }
+      } catch (error) {
+        return res.status(400).json({
+          message: "Invalid existing image data",
+        });
+      }
+    } else {
+      // If frontend doesn't send existingImages,
+      // keep the current images
+      remainingImages = variant.images || [];
+    }
+
+    // =====================================================
     // SKU
     // =====================================================
 
     if (sku !== undefined) {
-      const normalizedSKU =
-        sku.trim().toUpperCase();
+      const normalizedSKU = sku.trim().toUpperCase();
 
-      if (
-        normalizedSKU !== variant.sku
-      ) {
-        const existingSKU =
-          await Variant.findOne({
-            sku: normalizedSKU,
-            _id: { $ne: id },
-          });
+      if (normalizedSKU !== variant.sku) {
+        const existingSKU = await Variant.findOne({
+          sku: normalizedSKU,
+          _id: { $ne: id },
+        });
 
         if (existingSKU) {
           return res.status(409).json({
-            message:
-              "SKU already exists",
+            message: "SKU already exists",
           });
         }
 
-        variant.sku =
-          normalizedSKU;
+        variant.sku = normalizedSKU;
       }
     }
 
@@ -283,26 +305,20 @@ const UpdateVariant = async (
     // =====================================================
 
     if (name !== undefined) {
-      variant.name =
-        name.trim();
+      variant.name = name.trim();
     }
 
     if (price !== undefined) {
-      variant.price =
-        Number(price);
+      variant.price = Number(price);
     }
 
-    if (
-      discountPercent !==
-      undefined
-    ) {
+    if (discountPercent !== undefined) {
       variant.discountPercent =
         Number(discountPercent);
     }
 
     if (stock !== undefined) {
-      variant.stock =
-        Number(stock);
+      variant.stock = Number(stock);
     }
 
     if (isActive !== undefined) {
@@ -312,65 +328,69 @@ const UpdateVariant = async (
     }
 
     // =====================================================
-    // NEW IMAGES
+    // UPDATE IMAGES
     // =====================================================
 
-    if (
-      req.files &&
-      req.files.length > 0
-    ) {
-      const newImages =
-        await Promise.all(
-          req.files.map((file) => {
-            return new Promise(
-              (
-                resolve,
-                reject
-              ) => {
-                const stream =
-                  cloudinary.uploader.upload_stream(
-                    {
-                      folder:
-                        "ostik/variants",
-                      resource_type:
-                        "image",
-                    },
-                    (
-                      error,
-                      result
-                    ) => {
-                      if (error) {
-                        reject(error);
-                      } else {
-                        resolve(
-                          result.secure_url
-                        );
-                      }
-                    }
-                  );
+    let finalImages = [...remainingImages];
 
-                stream.end(
-                  file.buffer
-                );
-              }
-            );
-          })
-        );
+    // Upload newly selected images
+    if (req.files && req.files.length > 0) {
+      const newImages = await Promise.all(
+        req.files.map((file) => {
+          return new Promise((resolve, reject) => {
+            const stream =
+              cloudinary.uploader.upload_stream(
+                {
+                  folder: "ostik/variants",
+                  resource_type: "image",
+                },
+                (error, result) => {
+                  if (error) {
+                    reject(error);
+                  } else {
+                    resolve(result.secure_url);
+                  }
+                }
+              );
 
-      // Replace old variant images
-      variant.images =
-        newImages;
+            stream.end(file.buffer);
+          });
+        })
+      );
+
+      // Keep remaining existing images
+      // and add newly uploaded images
+      finalImages = [
+        ...remainingImages,
+        ...newImages,
+      ];
     }
+
+    // =====================================================
+    // MAXIMUM 5 IMAGES
+    // =====================================================
+
+    if (finalImages.length > 5) {
+      return res.status(400).json({
+        message: "Maximum 5 images are allowed",
+      });
+    }
+
+    // Save final image list
+    variant.images = finalImages;
+
+    // =====================================================
+    // SAVE VARIANT
+    // =====================================================
 
     await variant.save();
 
     return res.status(200).json({
-      message:
-        "Variant updated successfully",
+      message: "Variant updated successfully",
       variant,
     });
   } catch (err) {
-    console.log(
+    console.error(
       "UpdateVariant ERROR:",
       err
     );
