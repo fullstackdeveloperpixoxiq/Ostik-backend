@@ -172,7 +172,7 @@ const CreateOrder = async (req, res) => {
     // SHIPPING
     // -------------------------
 
-    const shippingFee = subtotal >= 999 ? 0 : 70;
+    const shippingFee = subtotal >= 100000 ? 0 : 70;
 
     // -------------------------
     // DISCOUNT
