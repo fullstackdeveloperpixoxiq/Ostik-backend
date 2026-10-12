@@ -3,6 +3,7 @@ const CartSchema = require("../models/CartSchema");
 const UserSchema = require("../models/UserSchema");
 const ProductSchema = require("../models/ProductSchema");
 const VariantSchema = require("../models/VariantSchema");
+const ShippingSettings = require("../models/ShippingSettingSchema");
 
 
 // =====================================================
@@ -169,11 +170,23 @@ const CreateOrder = async (req, res) => {
     }
 
     // -------------------------
-    // SHIPPING
+    // SHIPPING settings
     // -------------------------
 
-    const shippingFee = subtotal >= 100000 ? 0 : 70;
+    let shippingSettings = await ShippingSettings.findOne();
 
+    // Create default settings if none exist
+    if (!shippingSettings) {
+      shippingSettings = await ShippingSettings.create({});
+    }
+
+   const shippingFee =
+      subtotal === 0
+        ? 0
+        : shippingSettings.freeDeliveryEnabled &&
+          subtotal >= Number(shippingSettings.freeDeliveryThreshold)
+        ? 0
+        : Number(shippingSettings.standardShippingFee);
     // -------------------------
     // DISCOUNT
     // -------------------------
@@ -688,18 +701,32 @@ const UpdateOrder = async (req, res) => {
 
     if (trackingNumber !== undefined) {
 
-      order.trackingNumber =
-        trackingNumber;
+      if(!order.shipping){
+        order.shipping= {}
+      }
+      order.shipping.trackingNumber= trackingNumber
     }
 
     // =====================================================
     // CARRIER
     // =====================================================
 
-    if (carrier !== undefined) {
+    if(carrier !== undefined){
+      const selectedCarrier= String(carrier).trim();
 
-      order.carrier =
-        carrier;
+      const shippingSettings= await ShippingSettings.findOne();
+      const availableCarriers= shippingSettings?.availableCarriers || [];
+
+      if(!availableCarriers.includes(selectedCarrier)){
+        return res.status(400).json({
+          message: "Please select a valid delivery carrier",
+        })
+      }
+
+      if(!order.shipping){
+        order.shipping= {}
+      }
+      order.shipping.carrier = selectedCarrier;
     }
 
     // =====================================================

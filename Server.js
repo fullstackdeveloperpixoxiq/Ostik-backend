@@ -18,6 +18,7 @@ const ContactRouter= require("./Routes/ContactRoutes")
 const NewsletterRouter= require("./Routes/NewsletterRoutes")
 const ReturnRouter= require("./Routes/ReturnRoutes")
 const ExchangeRouter= require("./Routes/ExchangeRoutes")
+const SettingsRouter= require("./Routes/SettingsRoutes")
 
 const cors= require("cors")
 require("dotenv").config()
@@ -63,6 +64,7 @@ app.use("/api/contact", ContactRouter)
 app.use("/api/newsletter", NewsletterRouter)
 app.use("/api/return", ReturnRouter)
 app.use("/api/exchange", ExchangeRouter)
+app.use("/api/settings", SettingsRouter)
 
 
 //admin side
