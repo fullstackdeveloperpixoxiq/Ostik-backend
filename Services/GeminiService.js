@@ -1,5 +1,6 @@
 const { GoogleGenAI, Type, FunctionCallingConfigMode } = require("@google/genai");
 const DataService = require("./ChatbotDataService");
+const ModelPool = require("./GeminiModelPool");
 
 /*
   Gemini integration for the customer chatbot.
@@ -13,10 +14,10 @@ const DataService = require("./ChatbotDataService");
     the userId from the verified JWT via `context`, never from model output.
 */
 
-const DEFAULT_MODEL = "gemini-3.5-flash";
-const DEFAULT_FALLBACK_MODEL = "gemini-3.5-flash-lite";
-const REQUEST_TIMEOUT_MS = Number(process.env.GEMINI_TIMEOUT_MS) || 15000; // per Gemini call
-const PRIMARY_COOLDOWN_MS = 60 * 1000; // skip an overloaded primary model for a minute
+// No model is hardcoded: see GeminiModelPool.js (auto-discovery + health checks).
+const REQUEST_TIMEOUT_MS = Number(process.env.GEMINI_TIMEOUT_MS) || 10000; // per Gemini call
+const TURN_DEADLINE_MS = Number(process.env.GEMINI_TURN_DEADLINE_MS) || 40000; // whole reply, all models
+const MAX_MODELS_PER_TURN = 4;
 const MAX_TOOL_ROUNDS = 4;
 const MAX_CALLS_PER_ROUND = 4;
 
@@ -39,7 +40,7 @@ const getClient = () => {
     client = new GoogleGenAI({
       apiKey: process.env.GEMINI_API_KEY,
       // No hidden SDK retries (they can take close to a minute on 503s).
-      // We fail over to the fallback model ourselves instead.
+      // We fail over to another healthy model ourselves instead.
       httpOptions: { retryOptions: { attempts: 1 } },
     });
   }
@@ -47,15 +48,6 @@ const getClient = () => {
   return client;
 };
 
-const getModel = () => (process.env.GEMINI_MODEL || DEFAULT_MODEL).trim();
-
-// Set GEMINI_FALLBACK_MODEL=none to disable fail-over.
-const getFallbackModel = () => {
-  const value = (process.env.GEMINI_FALLBACK_MODEL || DEFAULT_FALLBACK_MODEL).trim();
-  return value && value.toLowerCase() !== "none" && value !== getModel() ? value : null;
-};
-
-let primaryUnavailableUntil = 0;
 
 // ---------------------------------------------------------------------------
 // Tool declarations (predefined schemas)
@@ -218,9 +210,8 @@ const mapGeminiError = (err) => {
     return new ChatbotError("AI_BUSY", "The assistant is very busy right now. Please try again in a moment.", 503);
   }
 
-  if (status === 404 && /model/i.test(message)) {
-    console.error("Gemini model not available. Check GEMINI_MODEL / GEMINI_FALLBACK_MODEL.");
-    return new ChatbotError("AI_NOT_CONFIGURED", "The shopping assistant is not available right now.", 503);
+  if (status === 404) {
+    return new ChatbotError("AI_MODEL_NOT_FOUND", "The assistant could not respond right now. Please try again.", 503);
   }
 
   if (status === 401 || status === 403 || /API key/i.test(message)) {
@@ -230,32 +221,52 @@ const mapGeminiError = (err) => {
   return new ChatbotError("AI_ERROR", "The assistant could not respond right now. Please try again.", 502);
 };
 
-const RETRIABLE = new Set(["AI_TIMEOUT", "AI_QUOTA", "AI_BUSY"]);
+// Errors after which another model is tried. AI_NOT_CONFIGURED (bad/missing key)
+// is not retried: every model would fail the same way.
+const RETRIABLE = new Set(["AI_TIMEOUT", "AI_QUOTA", "AI_BUSY", "AI_MODEL_NOT_FOUND", "AI_ERROR"]);
 
-const callModel = async (params) => {
+const FAILURE_KIND = {
+  AI_MODEL_NOT_FOUND: "NOT_FOUND",
+  AI_TIMEOUT: "TIMEOUT",
+  AI_QUOTA: "QUOTA",
+  AI_BUSY: "BUSY",
+  AI_ERROR: "ERROR",
+};
+
+const classifyError = (err) => FAILURE_KIND[mapGeminiError(err).code] || "ERROR";
+
+const callModel = async (params, deadline) => {
+  const remaining = deadline - Date.now();
+  if (remaining < 1500) {
+    throw new ChatbotError("AI_TIMEOUT", "The assistant is taking too long to respond. Please try again.", 504);
+  }
+
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  // Untested models get a shorter leash so a hanging model is skipped quickly.
+  const perCall = ModelPool.isKnownGood(params.model) ? REQUEST_TIMEOUT_MS : Math.min(REQUEST_TIMEOUT_MS, 6000);
+  const timer = setTimeout(() => controller.abort(), Math.min(perCall, remaining));
+  const started = Date.now();
 
   try {
-    return await getClient().models.generateContent({
+    const response = await getClient().models.generateContent({
       ...params,
       config: { ...params.config, abortSignal: controller.signal },
     });
+    ModelPool.markSuccess(params.model, Date.now() - started);
+    return response;
   } catch (err) {
-    if (controller.signal.aborted) {
-      throw new ChatbotError("AI_TIMEOUT", "The assistant is taking too long to respond. Please try again.", 504);
-    }
+    const mapped = controller.signal.aborted
+      ? new ChatbotError("AI_TIMEOUT", "The assistant is taking too long to respond. Please try again.", 504)
+      : mapGeminiError(err);
+
+    if (FAILURE_KIND[mapped.code]) ModelPool.markFailure(params.model, FAILURE_KIND[mapped.code]);
+
     // Log only safe metadata. Never log the key or full request.
-    console.error(`Gemini error (${params.model}):`, err?.status || "", String(err?.message || "").slice(0, 200));
-    throw mapGeminiError(err);
+    console.error(`Gemini ${mapped.code} (${params.model}):`, err?.status || "", String(err?.message || "").slice(0, 160));
+    throw mapped;
   } finally {
     clearTimeout(timer);
   }
-};
-
-const pickModel = () => {
-  const fallback = getFallbackModel();
-  return fallback && Date.now() < primaryUnavailableUntil ? fallback : getModel();
 };
 
 const runTool = async (call, context) => {
@@ -282,23 +293,35 @@ const runTool = async (call, context) => {
  * @param {{userId: string|null}} context  identity from the verified JWT
  */
 const generateReply = async ({ history, message, context }) => {
-  const primary = getModel();
-  const fallback = getFallbackModel();
-  const model = pickModel();
+  const deadline = Date.now() + TURN_DEADLINE_MS;
+  const candidates = (await ModelPool.getCandidates(getClient())).slice(0, MAX_MODELS_PER_TURN);
 
-  try {
-    return await runTurn({ history, message, context, model });
-  } catch (err) {
-    // Fail over by re-running the WHOLE turn on the fallback model (tool calls are
-    // read-only so repeating them is safe; thought signatures are model-specific,
-    // so we never switch models in the middle of a turn).
-    if (!fallback || model !== primary || !RETRIABLE.has(err.code)) throw err;
-    primaryUnavailableUntil = Date.now() + PRIMARY_COOLDOWN_MS;
-    return runTurn({ history, message, context, model: fallback });
+  if (!candidates.length) {
+    throw new ChatbotError("AI_BUSY", "The assistant is very busy right now. Please try again in a moment.", 503);
   }
+
+  let lastError = null;
+
+  for (const model of candidates) {
+    try {
+      return await runTurn({ history, message, context, model, deadline });
+    } catch (err) {
+      lastError = err;
+      // Fail over by re-running the WHOLE turn on the next model (tools are
+      // read-only so repeating them is safe; thought signatures are
+      // model-specific, so we never switch models in the middle of a turn).
+      if (!RETRIABLE.has(err.code) || deadline - Date.now() < 3000) break;
+    }
+  }
+
+  // Present a friendly, generic message for model-level problems.
+  if (lastError?.code === "AI_MODEL_NOT_FOUND" || lastError?.code === "AI_ERROR") {
+    throw new ChatbotError("AI_BUSY", "The assistant is very busy right now. Please try again in a moment.", 503);
+  }
+  throw lastError;
 };
 
-const runTurn = async ({ history, message, context, model }) => {
+const runTurn = async ({ history, message, context, model, deadline }) => {
   const contents = [
     ...history.map((m) => ({
       role: m.role === "assistant" ? "model" : "user",
@@ -321,13 +344,16 @@ const runTurn = async ({ history, message, context, model }) => {
   for (let round = 0; round <= MAX_TOOL_ROUNDS; round += 1) {
     const isLastRound = round === MAX_TOOL_ROUNDS;
 
-    const response = await callModel({
+    const response = await callModel(
+      {
         model,
         contents,
         config: isLastRound
           ? { ...config, toolConfig: { functionCallingConfig: { mode: FunctionCallingConfigMode.NONE } } }
           : config,
-    });
+      },
+      deadline
+    );
 
     const calls = response.functionCalls || [];
 
@@ -388,8 +414,8 @@ const runTurn = async ({ history, message, context, model }) => {
 module.exports = {
   generateReply,
   ChatbotError,
-  getModel,
-  getFallbackModel,
+  startModelHealthChecks: () => ModelPool.startBackgroundProbe(getClient, classifyError),
+  modelStatus: ModelPool.snapshot,
   TOOL_DECLARATIONS,
   TOOL_IMPLEMENTATIONS,
 };

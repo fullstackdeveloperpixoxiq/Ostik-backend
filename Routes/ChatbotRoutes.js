@@ -2,9 +2,13 @@ const express = require("express");
 const { rateLimit, ipKeyGenerator } = require("express-rate-limit");
 
 const { SendMessage, GetConversation } = require("../Controller/ChatbotController");
+const { startModelHealthChecks } = require("../Services/GeminiService");
 const optionalAuthMiddleware = require("../Middleware/OptionalAuthMiddleware");
 
 const router = express.Router();
+
+// Discover the available Gemini models and rank them by health in the background.
+startModelHealthChecks();
 
 // Rate limit per customer (when logged in) or per IP (guests).
 // Behind a proxy (Render, Railway, Nginx...) set TRUST_PROXY so req.ip is the real client IP.
