@@ -20,3 +20,5 @@ Thumbs.db
 # Temporary files
 temp/
 tmp/
+# Allow the documented example env file
+!.env.example

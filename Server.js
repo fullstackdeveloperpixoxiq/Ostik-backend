@@ -19,16 +19,26 @@ const NewsletterRouter= require("./Routes/NewsletterRoutes")
 const ReturnRouter= require("./Routes/ReturnRoutes")
 const ExchangeRouter= require("./Routes/ExchangeRoutes")
 const SettingsRouter= require("./Routes/SettingsRoutes")
+const ChatbotRouter= require("./Routes/ChatbotRoutes")
 
 const cors= require("cors")
 require("dotenv").config()
 
+
+// Opt-in: behind a reverse proxy set TRUST_PROXY=1 so req.ip (used by the
+// chatbot rate limiter) is the real client IP. No effect when unset.
+if (process.env.TRUST_PROXY) {
+    const hops = Number(process.env.TRUST_PROXY)
+    app.set("trust proxy", Number.isNaN(hops) ? process.env.TRUST_PROXY : hops)
+}
 
 //middleware
 app.use(express.json())
 
 const allowedOrigins= [
     "http://localhost:5173",
+    "http://localhost:5174",
+    /^http:\/\/localhost:\d+$/,
     "https://ostik-frontend.vercel.app",
     "https://ostik.in",
     "https://www.ostik.in",
@@ -65,6 +75,7 @@ app.use("/api/newsletter", NewsletterRouter)
 app.use("/api/return", ReturnRouter)
 app.use("/api/exchange", ExchangeRouter)
 app.use("/api/settings", SettingsRouter)
+app.use("/api/chatbot", ChatbotRouter) // customer AI shopping assistant (read-only)
 
 
 //admin side
