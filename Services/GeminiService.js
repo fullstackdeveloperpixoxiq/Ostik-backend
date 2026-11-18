@@ -57,15 +57,24 @@ const TOOL_DECLARATIONS = [
   {
     name: "search_products",
     description:
-      "Search the live Ostik catalogue for products customers can buy right now. Use for any product discovery, recommendation, price-range, discount or new-arrival question. Returns at most 6 products.",
+      "Search the live Ostik catalogue for products customers can buy right now. Use for any product discovery, recommendation, price-range, discount or new-arrival question. Returns at most 6 products. " +
+      "Customers may search products using product names, model numbers and SKU identifiers. When an identifier is provided, always call the product search tool. " +
+      "SKU belongs to product variants. Model numbers may be stored in product specifications. " +
+      "Never conclude that a product is unavailable without checking exact SKU and model matches. " +
+      "Pass identifiers (e.g. OST405, OST-401, OST-BLK-001) in the `identifier` field exactly as the customer wrote them.",
     parameters: {
       type: Type.OBJECT,
       properties: {
+        identifier: {
+          type: Type.STRING,
+          description:
+            "SKU or model number exactly as written by the customer, e.g. 'OST405'. Several can be comma-separated. Checked against variant SKUs and product model numbers (exact first, then close matches).",
+        },
         query: {
           type: Type.STRING,
-          description: "Short keywords describing the product, e.g. 'black shirt', 'oversized t-shirt', 'summer'. Omit for general browsing.",
+          description: "Short keywords describing the product, e.g. 'black earphones', 'fast charger', 'power bank'. Omit for general browsing.",
         },
-        category: { type: Type.STRING, description: "Optional category name, e.g. 'shirts'." },
+        category: { type: Type.STRING, description: "Optional category name, e.g. 'chargers'." },
         minPrice: { type: Type.NUMBER, description: "Minimum final price in INR." },
         maxPrice: { type: Type.NUMBER, description: "Maximum final price in INR (e.g. 1000 for 'under ₹1000')." },
         onlyDiscounted: { type: Type.BOOLEAN, description: "Only products currently on discount." },
@@ -87,7 +96,7 @@ const TOOL_DECLARATIONS = [
       type: Type.OBJECT,
       properties: {
         productId: { type: Type.STRING, description: "24-character product ID." },
-        productName: { type: Type.STRING, description: "Product name if the ID is unknown." },
+        productName: { type: Type.STRING, description: "Product name, SKU or model number if the ID is unknown." },
       },
     },
   },
@@ -177,6 +186,7 @@ DATA RULES
 - If the request is vague (e.g. "suggest something"), you may search broadly, but ask one short clarifying question (occasion, size, budget, style) when it would clearly help.
 - Personal information (orders, returns, exchanges) is available only through get_my_orders, get_my_returns and get_my_exchanges, which always use the logged-in customer's own account. If a tool returns AUTH_REQUIRED, politely ask the customer to [log in](/login). Never guess or reveal anyone else's information, and never ask for passwords, OTPs or card details.
 - Order references look like #1A2B3C4D.
+- Product codes such as OST405 are SKUs (on product variants) or model numbers (in product specifications). Whenever the customer mentions a product code, call search_products with it in "identifier" before answering, and never say a product doesn't exist without that check. When it is found, show that exact product with its link, SKU, model number, variant, price, discount and stock. If the result is NOT_FOUND, say no available product has that code; do not suggest products with similar numbers unless the tool returned them as close matches.
 
 LINKS AND FORMAT
 - Link only to Ostik pages using relative paths in markdown: product pages [Name](/product/<productId>) using the exact url from tool results, and pages like /products, /offers, /orders, /orders/<id>, /returns, /exchanges, /shippingPolicy, /return&refund, /contact, /login, /cart, /wishlist. Never link to external websites.

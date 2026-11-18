@@ -20,6 +20,8 @@ const productCardSchema = new mongoose.Schema(
     image: String,
     category: String,
     variantName: String,
+    sku: String,
+    modelNumber: String,
     variantCount: Number,
     price: Number,
     finalPrice: Number,

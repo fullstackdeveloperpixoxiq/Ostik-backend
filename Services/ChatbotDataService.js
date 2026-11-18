@@ -164,6 +164,94 @@ const resolveCategoryIds = (categories, text) => {
   return [...ids];
 };
 
+// ---------------------------------------------------------------------------
+// Model number (stored inside the free-form ProductSchema.specs)
+// ---------------------------------------------------------------------------
+// Real data uses both "Model No" and "model No"; other spellings such as
+// Model, model, Model Number, modelNumber, model_number, modelNo are supported.
+const MODEL_KEY = /^\s*model[\s_.-]*(no|number|num|#)?\.?\s*$/i;
+const MODEL_KEY_SOURCE = "^\\s*model[\\s_.-]*(no|number|num|#)?\\.?\\s*$";
+
+const getModelNumber = (specs) => {
+  if (!specs || typeof specs !== "object") return null;
+
+  // [{ key|name|label, value }] format
+  if (Array.isArray(specs)) {
+    for (const entry of specs) {
+      const key = entry && (entry.key || entry.name || entry.label);
+      if (key && MODEL_KEY.test(String(key).trim()) && entry.value != null) return String(entry.value).trim();
+    }
+    return null;
+  }
+
+  for (const [key, value] of Object.entries(specs)) {
+    if (MODEL_KEY.test(key.trim()) && (typeof value === "string" || typeof value === "number")) {
+      return String(value).trim();
+    }
+  }
+
+  // one level of nesting, e.g. { General: { "Model No": "OST405" } }
+  for (const value of Object.values(specs)) {
+    if (value && typeof value === "object") {
+      const nested = getModelNumber(value);
+      if (nested) return nested;
+    }
+  }
+
+  return null;
+};
+
+// ---------------------------------------------------------------------------
+// Identifier (SKU / model number) detection
+// ---------------------------------------------------------------------------
+// An identifier starts with a letter and contains digits: OST405, ost-405,
+// OST-BLK-001, "OST 405". Wattages like "65W" (digit first) are not identifiers.
+const IDENTIFIER_TOKEN = /\b[a-z][a-z0-9]*(?:[-_][a-z0-9]+)*\b/gi;
+const NOT_IDENTIFIER_PREFIX = new Set([...STOP_WORDS, "upto", "within", "pack", "set", "size", "rs", "inr", "only", "just"]);
+
+const cleanIdentifier = (value) =>
+  String(value || "")
+    .trim()
+    .replace(/^[#"'`]+|[.,!?"'`]+$/g, "")
+    .slice(0, 40);
+
+const collectIdentifiers = (explicit, query) => {
+  const found = [];
+  const add = (v) => {
+    const id = cleanIdentifier(v);
+    if (id.length >= 3 && /[a-z]/i.test(id) && /\d/.test(id) && !found.some((f) => f.toUpperCase() === id.toUpperCase())) {
+      found.push(id);
+    }
+  };
+
+  if (typeof explicit === "string") explicit.split(/[,;]/).forEach(add);
+
+  if (typeof query === "string") {
+    for (const m of query.matchAll(IDENTIFIER_TOKEN)) {
+      // must contain a digit ("Type-C" is not an identifier)
+      if (/\d/.test(m[0]) && m[0].length <= 40) add(m[0]);
+    }
+
+    // "OST 405" written with a space. Lowercase prefixes must be short and not a
+    // normal word, so "under 1000" or "within 1500" are never treated as codes.
+    for (const m of query.matchAll(/\b([a-z]{2,6})\s+(\d{2,8})\b/gi)) {
+      const prefix = m[1];
+      const isUpper = prefix === prefix.toUpperCase();
+      if (!NOT_IDENTIFIER_PREFIX.has(prefix.toLowerCase()) && (isUpper || prefix.length <= 4)) {
+        add(`${prefix} ${m[2]}`);
+      }
+    }
+  }
+
+  return found.slice(0, 4);
+};
+
+// "ost 405" -> /^O[\s_-]*S[\s_-]*T[\s_-]*4[\s_-]*0[\s_-]*5$/i (ignores separators only)
+const separatorInsensitive = (id) => {
+  const chars = id.replace(/[^a-z0-9]/gi, "").split("").map(escapeRegex);
+  return chars.length ? new RegExp(`^${chars.join("[\\s_-]*")}$`, "i") : null;
+};
+
 // Compact product card for the frontend (only public catalogue data)
 const toProductCard = (product, variants, categoryName, preferredVariant) => {
   const purchasable = variants.filter(isPurchasable);
@@ -179,6 +267,8 @@ const toProductCard = (product, variants, categoryName, preferredVariant) => {
     image: product.images?.[0] || display?.images?.[0] || "",
     category: categoryName || "",
     variantName: display?.name || "",
+    sku: display?.sku || "",
+    modelNumber: getModelNumber(product.specs) || "",
     variantCount: variants.length,
     price: display ? Number(display.price) : null,
     finalPrice: display ? finalPriceOf(display) : null,
@@ -190,6 +280,7 @@ const toProductCard = (product, variants, categoryName, preferredVariant) => {
 
 const variantSummary = (v) => ({
   variant: v.name,
+  sku: v.sku || undefined,
   price: Number(v.price),
   discountPercent: Number(v.discountPercent) || 0,
   finalPrice: finalPriceOf(v),
@@ -200,11 +291,276 @@ const variantSummary = (v) => ({
 // PUBLIC TOOLS
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// SKU / MODEL NUMBER LOOKUP
+// ---------------------------------------------------------------------------
+// SKU lives on VariantSchema.sku; the model number lives in ProductSchema.specs.
+// Order: exact SKU -> exact model -> same code ignoring spaces/hyphens ->
+// partial code. Products must be customer-visible and variants active.
+
+const VARIANT_FIELDS = "product name sku price discountPercent stock images isActive";
+const PRODUCT_FIELDS = "name description category images specs status isNewArrival";
+
+const visibleProductFilter = (categories) => ({
+  status: { $in: VISIBLE_PRODUCT_STATUSES },
+  category: { $in: categories.map((c) => c._id) },
+});
+
+// Product IDs whose specs contain a model key ("Model No", "model", "modelNumber", ...)
+// with a value matching `valueRegex`. Only the matching _ids are returned.
+const findProductIdsByModel = async (valueRegex, matchFilter, limit = 10) => {
+  const [flat, list] = await Promise.all([
+    // specs stored as an object: { "Model No": "OST405", ... }
+    ProductSchema.aggregate([
+      { $match: matchFilter },
+      {
+        $project: {
+          kv: {
+            $cond: [{ $eq: [{ $type: "$specs" }, "object"] }, { $objectToArray: "$specs" }, []],
+          },
+        },
+      },
+      { $unwind: "$kv" },
+      { $match: { "kv.k": { $regex: MODEL_KEY_SOURCE, $options: "i" }, "kv.v": valueRegex } },
+      { $group: { _id: "$_id" } },
+      { $limit: limit },
+    ]),
+    // specs stored as a list: [{ key: "Model No", value: "OST405" }, ...]
+    ProductSchema.find({
+      ...matchFilter,
+      specs: {
+        $elemMatch: {
+          $or: ["key", "name", "label"].map((f) => ({ [f]: { $regex: MODEL_KEY_SOURCE, $options: "i" } })),
+          value: valueRegex,
+        },
+      },
+    })
+      .select("_id")
+      .limit(limit)
+      .lean(),
+  ]);
+
+  return [...new Set([...flat, ...list].map((d) => String(d._id)))];
+};
+
+const variantDetail = (v) => ({
+  variantId: String(v._id),
+  variant: v.name,
+  sku: v.sku,
+  price: Number(v.price),
+  discountPercent: Number(v.discountPercent) || 0,
+  finalPrice: finalPriceOf(v),
+  stock: Math.max(Number(v.stock) || 0, 0),
+  availability: isPurchasable(v) ? (Number(v.stock) <= 15 ? `In stock (only ${v.stock} left)` : "In stock") : "Out of stock",
+});
+
 /**
- * Search customer-visible, purchasable products.
+ * Build the identifier result for a set of matched products/variants.
+ * Re-checks visibility, so hidden products or inactive variants never leak.
+ */
+const buildIdentifierMatches = async ({ productIds, matchedVariantIds, categories, categoryNameById }) => {
+  if (!productIds.length) return [];
+
+  const products = await ProductSchema.find({ _id: { $in: productIds }, ...visibleProductFilter(categories) })
+    .select(PRODUCT_FIELDS)
+    .lean();
+
+  if (!products.length) return [];
+
+  const variants = await Variant.find({ product: { $in: products.map((p) => p._id) }, isActive: true })
+    .select(VARIANT_FIELDS)
+    .sort({ price: 1 })
+    .lean();
+
+  return products
+    .map((product) => {
+      const all = variants.filter((v) => String(v.product) === String(product._id));
+      if (!all.length) return null; // no active variant -> not shown
+
+      const matched = matchedVariantIds ? all.filter((v) => matchedVariantIds.has(String(v._id))) : [];
+      const categoryName = categoryNameById.get(String(product.category)) || "";
+
+      return {
+        product,
+        all,
+        matched,
+        categoryName,
+        forModel: {
+          productId: String(product._id),
+          name: product.name,
+          category: categoryName,
+          url: `/product/${product._id}`,
+          description: truncate(product.description, 400),
+          modelNumber: getModelNumber(product.specs) || "Not listed",
+          status: "Published on Ostik",
+          imageCount: (product.images || []).length,
+          matchedVariants: matched.map(variantDetail),
+          variants: all.slice(0, 10).map(variantDetail),
+        },
+        card: toProductCard(product, all, categoryName, matched[0]),
+      };
+    })
+    .filter(Boolean);
+};
+
+/**
+ * Look up one SKU / model identifier. Returns
+ *   { status: "found", matchType, matches }  or
+ *   { status: "unavailable" }  (exists but hidden / inactive) or
+ *   { status: "not_found" }
+ */
+const lookupIdentifier = async (identifier, categories, categoryNameById) => {
+  const id = cleanIdentifier(identifier);
+  const exact = new RegExp(`^\\s*${escapeRegex(id)}\\s*$`, "i");
+  const visible = visibleProductFilter(categories);
+  const ctx = { categories, categoryNameById };
+
+  const fromVariants = async (skuRegex, limit = 10) => {
+    const variants = await Variant.find({ sku: skuRegex, isActive: true }).select("_id product").limit(limit).lean();
+    return buildIdentifierMatches({
+      ...ctx,
+      productIds: [...new Set(variants.map((v) => String(v.product)))],
+      matchedVariantIds: new Set(variants.map((v) => String(v._id))),
+    });
+  };
+
+  const fromModel = async (valueRegex, limit = 10) =>
+    buildIdentifierMatches({ ...ctx, productIds: await findProductIdsByModel(valueRegex, visible, limit) });
+
+  // 1. Exact SKU (case-insensitive, trimmed)
+  let matches = await fromVariants(exact);
+  if (matches.length) return { status: "found", matchType: "exact_sku", matches };
+
+  // 2. Exact model number
+  matches = await fromModel(exact);
+  if (matches.length) return { status: "found", matchType: "exact_model", matches };
+
+  // The code exists but belongs to an inactive variant / unpublished product:
+  // report it as unavailable and do NOT fall through to look-alike codes.
+  const hiddenSku = await Variant.exists({ sku: exact });
+  const hiddenModel = hiddenSku ? null : (await findProductIdsByModel(exact, {}, 1)).length > 0;
+  if (hiddenSku || hiddenModel) return { status: "unavailable" };
+
+  // 3. Same code ignoring spaces / hyphens / underscores ("OST 405" -> OST405)
+  const loose = separatorInsensitive(id);
+  if (loose) {
+    const [bySku, byModel] = [await fromVariants(loose), await fromModel(loose)];
+    matches = mergeMatches(bySku, byModel);
+    if (matches.length) return { status: "found", matchType: "same_code_different_formatting", matches };
+  }
+
+  // 4. Partial code (stored SKU / model CONTAINS what the customer typed)
+  if (id.replace(/[^a-z0-9]/gi, "").length >= 4) {
+    const partial = new RegExp(escapeRegex(id), "i");
+    const [bySku, byModel] = [await fromVariants(partial, 12), await fromModel(partial, 12)];
+    matches = mergeMatches(bySku, byModel).slice(0, MAX_SEARCH_RESULTS);
+    if (matches.length) return { status: "found", matchType: "partial_code", matches };
+  }
+
+  return { status: "not_found" };
+};
+
+const mergeMatches = (...lists) => {
+  const byId = new Map();
+  lists.flat().forEach((m) => {
+    const key = String(m.product._id);
+    if (!byId.has(key)) byId.set(key, m);
+    else if (m.matched.length && !byId.get(key).matched.length) byId.set(key, m);
+  });
+  return [...byId.values()];
+};
+
+const MATCH_NOTES = {
+  exact_sku: "Exact SKU match.",
+  exact_model: "Exact model number match.",
+  same_code_different_formatting:
+    "Matched after ignoring spaces/hyphens. Tell the customer the exact SKU/model as stored.",
+  partial_code:
+    "No exact match. These products have a SKU or model number that CONTAINS the code typed. Say these are close matches.",
+};
+
+const searchByIdentifiers = async (identifiers, categories, categoryNameById) => {
+  const results = [];
+  const cards = new Map();
+
+  for (const identifier of identifiers) {
+    const r = await lookupIdentifier(identifier, categories, categoryNameById);
+
+    if (r.status === "found") {
+      r.matches.forEach((m) => cards.set(m.card._id, m.card));
+      results.push({
+        identifier,
+        result: "FOUND",
+        matchType: r.matchType,
+        note: MATCH_NOTES[r.matchType],
+        products: r.matches.map((m) => m.forModel),
+      });
+    } else {
+      // "unavailable" and "not_found" look the same to the customer on purpose:
+      // never reveal details of unpublished products or inactive variants.
+      results.push({
+        identifier,
+        result: "NOT_FOUND",
+        note: `No product currently available on Ostik has the SKU or model number "${identifier}". Checked exact SKU, exact model number, alternative formatting and partial matches.`,
+      });
+    }
+  }
+
+  return { results, cards: [...cards.values()].slice(0, MAX_SEARCH_RESULTS) };
+};
+
+/**
+ * Product search tool used by Gemini.
+ * 1. SKU / model number identifiers are looked up first (exact before fuzzy).
+ * 2. Otherwise (or for the rest of the message) the normal text search runs.
  * Returns { forModel, cards }.
  */
 const searchProducts = async (args = {}) => {
+  const query = typeof args.query === "string" ? args.query.slice(0, 120) : "";
+  const identifiers = collectIdentifiers(args.identifier, query);
+
+  if (!identifiers.length) return searchProductsText(args);
+
+  const categories = await getActiveCategories();
+  const categoryNameById = new Map(categories.map((c) => [String(c._id), c.name]));
+  const idSearch = await searchByIdentifiers(identifiers, categories, categoryNameById);
+
+  if (idSearch.results.some((r) => r.result === "FOUND")) {
+    return {
+      forModel: { searchType: "sku_or_model_lookup", results: idSearch.results },
+      cards: idSearch.cards,
+    };
+  }
+
+  // Nothing matched the code(s). Only run a text search if the customer gave
+  // other criteria too (e.g. "OST999 earphones"), never on the code itself,
+  // so unrelated products are not returned just because a number is similar.
+  let textQuery = query;
+  identifiers.forEach((id) => {
+    textQuery = textQuery.replace(new RegExp(escapeRegex(id), "gi"), " ");
+  });
+
+  const hasOtherCriteria =
+    extractKeywords(textQuery).length > 0 ||
+    (typeof args.category === "string" && args.category.trim()) ||
+    args.maxPrice != null ||
+    args.minPrice != null ||
+    args.onlyDiscounted === true ||
+    args.newArrivals === true ||
+    args.featured === true;
+
+  const lookup = { searchType: "sku_or_model_lookup", results: idSearch.results };
+
+  if (!hasOtherCriteria) return { forModel: lookup, cards: [] };
+
+  const text = await searchProductsText({ ...args, query: textQuery });
+  return {
+    forModel: { identifierLookup: idSearch.results, ...text.forModel },
+    cards: text.cards,
+  };
+};
+
+const searchProductsText = async (args = {}) => {
   const query = typeof args.query === "string" ? args.query.slice(0, 120) : "";
   const categoryText = typeof args.category === "string" ? args.category.slice(0, 60) : "";
   const minPrice = toNumberOrNull(args.minPrice);
@@ -277,7 +633,7 @@ const searchProducts = async (args = {}) => {
     product: { $in: products.map((p) => p._id) },
     isActive: true,
   })
-    .select("product name price discountPercent stock images isActive")
+    .select("product name sku price discountPercent stock images isActive")
     .lean();
 
   const variantsByProduct = new Map();
@@ -433,6 +789,10 @@ const getProductDetails = async (args = {}) => {
   }
 
   if (!product) {
+    // "productName" may actually be a SKU or model number such as OST405.
+    const identifiers = collectIdentifiers(name, name);
+    if (identifiers.length) return searchProducts({ identifier: identifiers.join(",") });
+
     return {
       forModel: { found: false, note: "This product was not found or is not currently available on Ostik." },
       cards: [],
@@ -440,7 +800,7 @@ const getProductDetails = async (args = {}) => {
   }
 
   const variants = await Variant.find({ product: product._id, isActive: true })
-    .select("name price discountPercent stock images isActive")
+    .select("name sku price discountPercent stock images isActive")
     .sort({ price: 1 })
     .lean();
 
@@ -455,6 +815,7 @@ const getProductDetails = async (args = {}) => {
       category: categoryName,
       url: `/product/${product._id}`,
       description: truncate(product.description, 1200),
+      modelNumber: getModelNumber(product.specs) || "Not listed",
       specifications: specs.length ? specs : "No specifications listed for this product.",
       imageCount: (product.images || []).length,
       isNewArrival: !!product.isNewArrival,
@@ -676,5 +1037,5 @@ module.exports = {
   getMyReturns,
   getMyExchanges,
   // exported for tests
-  _internal: { extractKeywords, finalPriceOf, matchesOrderRef, flattenSpecs },
+  _internal: { extractKeywords, finalPriceOf, matchesOrderRef, flattenSpecs, collectIdentifiers, getModelNumber, lookupIdentifier },
 };
