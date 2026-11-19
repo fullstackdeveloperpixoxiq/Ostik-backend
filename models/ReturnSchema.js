@@ -122,4 +122,9 @@ const returnSchema = new mongoose.Schema(
   }
 );
 
+
+// Indexes for storefront read paths (built automatically on startup).
+// "my returns", newest first
+returnSchema.index({ user: 1, createdAt: -1 });
+
 module.exports = mongoose.model("Return", returnSchema);

@@ -22,6 +22,7 @@ const SettingsRouter= require("./Routes/SettingsRoutes")
 const ChatbotRouter= require("./Routes/ChatbotRoutes")
 
 const cors= require("cors")
+const compression= require("compression")
 require("dotenv").config()
 
 
@@ -33,6 +34,9 @@ if (process.env.TRUST_PROXY) {
 }
 
 //middleware
+// gzip/brotli-negotiated compression for JSON responses (product lists are
+// highly repetitive and shrink ~80%). Tiny responses are left as-is.
+app.use(compression({ threshold: 1024 }))
 app.use(express.json())
 
 const allowedOrigins= [

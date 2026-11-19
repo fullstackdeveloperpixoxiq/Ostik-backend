@@ -37,4 +37,9 @@ const categorySchema = new mongoose.Schema(
   }
 );
 
+
+// Indexes for storefront read paths (built automatically on startup).
+// subcategory lookup
+categorySchema.index({ parentCategory: 1, isActive: 1 });
+
 module.exports = mongoose.model("Category", categorySchema);

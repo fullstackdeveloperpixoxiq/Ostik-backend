@@ -2,6 +2,10 @@ const ProductSchema = require("../models/ProductSchema");
 const Variant = require("../models/VariantSchema");
 const Order = require("../models/OrderSchema");
 const cloudinary = require("../Config/Cloudinary");
+const memoryCache = require("../Utils/memoryCache");
+const { findProductIdsByModel } = require("../Services/ChatbotDataService");
+
+const HOT_SELLING_RANKING_TTL = 5 * 60 * 1000;
 
 
 // CREATE PRODUCT
@@ -137,31 +141,79 @@ const CreateProduct = async (req, res) => {
 // ===============================
 // GET ALL PRODUCTS
 // ===============================
+const escapeRegex = (value) =>
+  value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+// Fetch active variants for many products in ONE query (instead of one query
+// per product) and group them by product id, preserving price order.
+const getActiveVariantsByProduct = async (productIds, sort) => {
+  const map = new Map(productIds.map((id) => [String(id), []]));
+  if (!productIds.length) return map;
+
+  let query = Variant.find({
+    product: { $in: productIds },
+    isActive: true,
+  });
+  if (sort) query = query.sort(sort);
+
+  const variants = await query.lean();
+  variants.forEach((variant) => {
+    map.get(String(variant.product))?.push(variant);
+  });
+  return map;
+};
+
+/*
+  Query params (all optional, backwards compatible):
+    search               name / description / SKU / model-number match
+    category             category slug
+    includeSubcategories "true" -> also include active child categories
+    limit, page          pagination; when omitted every product is returned
+*/
 const GetProducts = async (req, res) => {
   try {
 
-    const { category, search } = req.query;
+    const { category, search, includeSubcategories } = req.query;
 
     let filter = {};
 
     //search filter
     if (search && search.trim() !== "") {
-      const searchValue = search.trim();
+      const searchValue = search.trim().slice(0, 100);
+      const pattern = escapeRegex(searchValue);
+
+      // SKU (on variants) and model number (inside specs) matches are added
+      // to name/description matches, so results only ever grow.
+      const [skuProductIds, modelProductIds] = await Promise.all([
+        Variant.distinct("product", {
+          sku: { $regex: pattern, $options: "i" },
+        }),
+        findProductIdsByModel(
+          { $regex: pattern, $options: "i" },
+          {},
+          100
+        ).catch(() => []),
+      ]);
 
       filter.$or = [
         {
           name: {
-            $regex: searchValue,
+            $regex: pattern,
             $options: "i",
           },
         },
         {
           description: {
-            $regex: searchValue,
+            $regex: pattern,
             $options: "i",
           },
         },
       ];
+
+      const identifierIds = [...skuProductIds, ...modelProductIds];
+      if (identifierIds.length) {
+        filter.$or.push({ _id: { $in: identifierIds } });
+      }
     }
 
     // Category slug vannittundenkil
@@ -173,7 +225,9 @@ const GetProducts = async (req, res) => {
       const categoryData = await CategorySchema.findOne({
         slug: category,
         isActive: true,
-      });
+      })
+        .select("_id")
+        .lean();
 
       if (!categoryData) {
         return res.status(404).json({
@@ -183,31 +237,58 @@ const GetProducts = async (req, res) => {
       }
 
       filter.category = categoryData._id;
+
+      // One request for a main category and all its subcategories
+      // (the storefront previously sent one request per subcategory).
+      if (includeSubcategories === "true") {
+        const children = await CategorySchema.find({
+          parentCategory: categoryData._id,
+          isActive: true,
+        })
+          .select("_id")
+          .lean();
+
+        if (children.length) {
+          filter.category = {
+            $in: [categoryData._id, ...children.map((c) => c._id)],
+          };
+        }
+      }
     }
 
+    // Optional pagination
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 0, 0), 100);
+    const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+
     //get products
-    const products = await ProductSchema.find(filter)
+    let productQuery = ProductSchema.find(filter)
       .populate("category", "name slug")
       .sort({ createdAt: -1 });
 
-      //active variants of each product
-      const productsWithVariants = await Promise.all(
-      products.map(async (product) => {
-        const variants = await Variant.find({
-          product: product._id,
-          isActive: true,
-        }).sort({ price: 1 });
-
-        return{
-          ...product.toObject(),
-          variants
-        }
+    if (limit) {
+      productQuery = productQuery.skip((page - 1) * limit).limit(limit);
     }
-  )
-)
-return res.status(200).json({
+
+    const [products, total] = await Promise.all([
+      productQuery.lean(),
+      limit ? ProductSchema.countDocuments(filter) : null,
+    ]);
+
+    //active variants of all products (single query)
+    const variantMap = await getActiveVariantsByProduct(
+      products.map((product) => product._id),
+      { price: 1, _id: 1 }
+    );
+
+    const productsWithVariants = products.map((product) => ({
+      ...product,
+      variants: variantMap.get(String(product._id)) || [],
+    }));
+
+    return res.status(200).json({
       message: "Products fetched successfully",
       count: productsWithVariants.length,
+      ...(limit ? { total, page, limit } : {}),
       products: productsWithVariants,
     });
   } catch (err) {
@@ -233,8 +314,18 @@ const GetProduct = async (req, res) => {
     const { id } = req.params;
 
 
-    const product = await ProductSchema.findById(id)
-      .populate("category", "name slug");
+    // Product and its active variants are independent lookups -> run in parallel.
+    const [product, variants] = await Promise.all([
+      ProductSchema.findById(id)
+        .populate("category", "name slug")
+        .lean(),
+      Variant.find({
+        product: id,
+        isActive: true,
+      })
+        .sort({ price: 1, _id: 1 })
+        .lean(),
+    ]);
 
 
     if (!product) {
@@ -244,14 +335,6 @@ const GetProduct = async (req, res) => {
 
       });
     }
-
-    //get active variant
-      const variants= await Variant.find({
-        product: product._id,
-        isActive: true
-      }).sort({
-        price: 1
-      })
 
     return res.status(200).json({
 
@@ -606,8 +689,13 @@ const DeleteProduct = async (req, res) => {
 const GetHotSellingProducts = async (req, res) => {
   try {
 
-    const hotSelling =
-      await Order.aggregate([
+    // The sales ranking (product ids + units sold only) scans every order, so
+    // it is cached briefly. Product details, prices and stock below are
+    // always read fresh.
+    const hotSelling = await memoryCache.wrap(
+      "product:hot-selling-ranking",
+      HOT_SELLING_RANKING_TTL,
+      () => Order.aggregate([
 
         {
           $match: {
@@ -653,7 +741,8 @@ const GetHotSellingProducts = async (req, res) => {
           $limit: 3,
         },
 
-      ]);
+      ])
+    );
 
 
     if (!hotSelling.length) {
@@ -670,59 +759,39 @@ const GetHotSellingProducts = async (req, res) => {
     }
 
 
-    const products =
-      await Promise.all(
+    // 2 queries total instead of 2 per product.
+    const rankedIds = hotSelling.map((item) => item._id);
 
-        hotSelling.map(async (item) => {
+    const [productDocs, variantMap] = await Promise.all([
+      ProductSchema.find({
+        _id: { $in: rankedIds },
+        status: "approved",
+      })
+        .populate("category", "name slug")
+        .lean(),
+      getActiveVariantsByProduct(rankedIds),
+    ]);
 
-          const product =
-            await ProductSchema.findOne({
+    const productById = new Map(
+      productDocs.map((product) => [String(product._id), product])
+    );
 
-              _id: item._id,
+    // Keep best-seller ranking order
+    const validProducts = hotSelling
+      .map((item) => {
+        const product = productById.get(String(item._id));
 
-              status: "approved",
+        if (!product) {
+          return null;
+        }
 
-            }).populate(
-              "category",
-              "name slug"
-            );
-
-
-          if (!product) {
-            return null;
-          }
-
-
-          const variants =
-            await Variant.find({
-
-              product: product._id,
-
-              isActive: true,
-
-            });
-
-
-          return {
-
-            ...product.toObject(),
-
-            totalSold:
-              item.totalSold,
-
-            variants,
-
-          };
-
-        })
-
-      );
-
-
-    const validProducts =
-      products.filter(
-        (product) => product !== null
-      );
+        return {
+          ...product,
+          totalSold: item.totalSold,
+          variants: variantMap.get(String(product._id)) || [],
+        };
+      })
+      .filter((product) => product !== null);
 
 
     return res.status(200).json({
@@ -767,11 +836,13 @@ const GetLimitedStockProducts = async (req, res) => {
       .populate({
         path: "product",
         match: { status: "approved" },
+        select: "name images category status",
         populate: {
           path: "category",
           select: "name slug",
         },
-      });
+      })
+      .lean();
 
     // 2. Product illatha variants remove cheyyuka
     const validVariants = lowStockVariants.filter(

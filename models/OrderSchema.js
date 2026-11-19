@@ -206,4 +206,11 @@ const orderSchema = new mongoose.Schema(
   }
 );
 
+
+// Indexes for storefront read paths (built automatically on startup).
+// "my orders", newest first
+orderSchema.index({ user: 1, createdAt: -1 });
+// hot-selling aggregation $match
+orderSchema.index({ orderStatus: 1 });
+
 module.exports = mongoose.model("Order", orderSchema);

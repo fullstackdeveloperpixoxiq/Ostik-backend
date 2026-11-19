@@ -74,4 +74,11 @@ const productSchema = new mongoose.Schema(
   }
 );
 
+
+// Indexes for storefront read paths (built automatically on startup).
+// category listing, newest first
+productSchema.index({ category: 1, createdAt: -1 });
+// full listing / latest products, newest first
+productSchema.index({ createdAt: -1 });
+
 module.exports = mongoose.model("Product", productSchema);

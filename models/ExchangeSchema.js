@@ -163,4 +163,9 @@ const exchangeSchema = new mongoose.Schema(
   }
 );
 
+
+// Indexes for storefront read paths (built automatically on startup).
+// "my exchanges", newest first
+exchangeSchema.index({ user: 1, createdAt: -1 });
+
 module.exports = mongoose.model("Exchange", exchangeSchema);

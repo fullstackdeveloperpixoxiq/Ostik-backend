@@ -1,5 +1,9 @@
 const CategorySchema = require("../models/CategorySchema");
 const cloudinary= require("../Config/Cloudinary")
+const memoryCache = require("../Utils/memoryCache")
+
+const CATEGORY_CACHE_KEY = "category:active"
+const CATEGORY_CACHE_TTL = 60 * 1000
 
 
 const CreateCategory = async (req, res) => {
@@ -93,11 +97,19 @@ const CreateCategory = async (req, res) => {
 const GetCategories = async (req, res) => {
     try {
 
-        const categories = await CategorySchema.find({
-            isActive:true
-        })
-            .populate("parentCategory", "name slug")
-            .sort({ createdAt: -1 });
+        // Requested on almost every storefront page (navbar, home, listing).
+        // Cached in-process for a short time; any category write clears it
+        // (see CategoryRoutes).
+        const categories = await memoryCache.wrap(
+            CATEGORY_CACHE_KEY,
+            CATEGORY_CACHE_TTL,
+            () => CategorySchema.find({
+                isActive:true
+            })
+                .populate("parentCategory", "name slug")
+                .sort({ createdAt: -1 })
+                .lean()
+        );
 
         res.status(200).json({
             message: "Categories fetched successfully",

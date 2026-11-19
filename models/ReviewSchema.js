@@ -54,4 +54,9 @@ const reviewSchema = new mongoose.Schema(
   }
 );
 
+
+// Indexes for storefront read paths (built automatically on startup).
+// product page reviews, newest first
+reviewSchema.index({ product: 1, createdAt: -1 });
+
 module.exports = mongoose.model("Review", reviewSchema);

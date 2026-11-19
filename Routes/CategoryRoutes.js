@@ -3,7 +3,18 @@ const { CreateCategory, GetCategories, GetCategory, DeleteCategory, UpdateCatego
 const upload= require("../Middleware/Upload");
 const authMiddleware = require("../Middleware/AuthMiddleware");
 const AdminMiddleware = require("../Middleware/AdminMiddleware");
+const memoryCache = require("../Utils/memoryCache");
 const router= express.Router();
+
+// Any category write clears the cached category list, both before the write
+// runs and once the response is sent, so the next read is always fresh.
+router.use((req, res, next) => {
+    if (req.method !== "GET") {
+        memoryCache.invalidate("category:");
+        res.on("finish", () => memoryCache.invalidate("category:"));
+    }
+    next();
+});
 
 
 router.post("/admin",authMiddleware,AdminMiddleware,upload.single("image"),CreateCategory);

@@ -95,20 +95,27 @@ const GetWishlist = async (req, res) => {
             });
         }
 
-        const products = await Promise.all(
-            wishlist.products.filter(Boolean)
-            .map(async (product)=>{
-                const variant= await VariantSchema.findOne({
-                    product: product._id,
-                    isActive: true
-                })
+        // One query for the first active variant of every wishlisted product
+        // (previously one query per product).
+        const wishlistProducts = wishlist.products.filter(Boolean);
 
-                return {
-                    ...product.toObject(),
-                    variant: variant ? variant.toObject() : null
-                };
-            })
-        );
+        const variants = await VariantSchema.find({
+            product: { $in: wishlistProducts.map((product) => product._id) },
+            isActive: true
+        }).lean();
+
+        const firstVariantByProduct = new Map();
+        variants.forEach((variant) => {
+            const key = String(variant.product);
+            if (!firstVariantByProduct.has(key)) {
+                firstVariantByProduct.set(key, variant);
+            }
+        });
+
+        const products = wishlistProducts.map((product) => ({
+            ...product.toObject(),
+            variant: firstVariantByProduct.get(String(product._id)) || null
+        }));
 
         res.status(200).json({
             message: "Wishlist fetched successfully",

@@ -1036,6 +1036,8 @@ module.exports = {
   getMyOrders,
   getMyReturns,
   getMyExchanges,
+  // shared with the storefront product search (ProductController.GetProducts)
+  findProductIdsByModel,
   // exported for tests
   _internal: { extractKeywords, finalPriceOf, matchesOrderRef, flattenSpecs, collectIdentifiers, getModelNumber, lookupIdentifier },
 };

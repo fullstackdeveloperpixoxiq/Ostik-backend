@@ -56,4 +56,11 @@ const variantSchema = new mongoose.Schema(
   }
 );
 
+
+// Indexes for storefront read paths (built automatically on startup).
+// product listing / detail / wishlist: active variants of given products, by price
+variantSchema.index({ product: 1, isActive: 1, price: 1 });
+// limited-stock section: active variants with low stock
+variantSchema.index({ isActive: 1, stock: 1 });
+
 module.exports = mongoose.model("Variant", variantSchema);
