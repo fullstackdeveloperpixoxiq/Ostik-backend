@@ -3,12 +3,16 @@ const mongoose = require("mongoose");
 
 const ChatConversation = require("../models/ChatConversationSchema");
 const { generateReply, ChatbotError } = require("../Services/GeminiService");
+const ChatUsage = require("../Services/ChatUsageService");
+const ChatbotSettings = require("../Services/ChatbotSettingsService");
 
 /*
   CUSTOMER CHATBOT CONTROLLER
 
   POST /api/chatbot/message
   GET  /api/chatbot/conversations/:id
+  GET  /api/chatbot/usage
+  GET  /api/chatbot/config      public widget settings (name, welcome, suggestions)
 
   Ownership model:
   - Logged-in customer -> conversation.user must equal req.user.userId (from JWT).
@@ -18,9 +22,7 @@ const { generateReply, ChatbotError } = require("../Services/GeminiService");
   Any mismatch returns 404 so conversation IDs cannot be probed.
 */
 
-const MAX_MESSAGE_LENGTH = 1000;
 const MAX_STORED_MESSAGES = 60; // per conversation
-const MAX_CONTEXT_MESSAGES = 12; // sent to Gemini per request
 const MAX_CONTEXT_CHARS_PER_MESSAGE = 2000;
 const MAX_CARDS = 6;
 const GUEST_TTL_DAYS = 7;
@@ -124,15 +126,34 @@ const SendMessage = async (req, res) => {
 
   const text = sanitizeMessage(message);
 
+  // Admin "Chatbot Settings". Fall back to defaults if they can't be read.
+  let settings;
+  try {
+    settings = await ChatbotSettings.getSettings();
+  } catch (err) {
+    console.error("Chatbot settings unavailable, using defaults:", err.message);
+    settings = { ...ChatbotSettings.DEFAULTS };
+  }
+
+  if (!settings.enabled) {
+    return res.status(503).json({
+      success: false,
+      code: "CHATBOT_DISABLED",
+      message: "The shopping assistant is not available right now.",
+    });
+  }
+
+  const maxMessageLength = settings.maxMessageLength;
+
   if (!text) {
     return res.status(400).json({ success: false, code: "INVALID_MESSAGE", message: "Please type a message." });
   }
 
-  if (text.length > MAX_MESSAGE_LENGTH) {
+  if (text.length > maxMessageLength) {
     return res.status(400).json({
       success: false,
       code: "MESSAGE_TOO_LONG",
-      message: `Messages can be up to ${MAX_MESSAGE_LENGTH} characters.`,
+      message: `Messages can be up to ${maxMessageLength} characters.`,
     });
   }
 
@@ -169,15 +190,24 @@ const SendMessage = async (req, res) => {
 
     inFlight.add(lockKey);
 
+    // Monthly quota (logged-in customers). Reserved BEFORE Gemini is called;
+    // committed only after the reply is saved, released on any failure.
+    let reservation = null;
+    let committed = false;
+
     try {
+      if (userId) {
+        reservation = await ChatUsage.reserve(userId);
+      }
+
       const history = conversation
-        ? conversation.messages.slice(-MAX_CONTEXT_MESSAGES).map((m) => ({
+        ? conversation.messages.slice(-settings.historyWindow).map((m) => ({
             role: m.role,
             content: m.content.slice(0, MAX_CONTEXT_CHARS_PER_MESSAGE),
           }))
         : [];
 
-      const result = await generateReply({ history, message: text, context: { userId } });
+      const result = await generateReply({ history, message: text, context: { userId }, settings });
 
       const cards = selectCards(result.reply, result.productCards);
 
@@ -201,6 +231,7 @@ const SendMessage = async (req, res) => {
         content: result.reply.slice(0, 8000),
         products: cards.length ? cards : undefined,
         requiresLogin: result.requiresLogin || undefined,
+        tokens: result.tokens || undefined,
         createdAt: new Date(),
       });
 
@@ -215,6 +246,17 @@ const SendMessage = async (req, res) => {
 
       const assistantMessage = conversation.messages[conversation.messages.length - 1];
 
+      let usage;
+      if (reservation) {
+        committed = true;
+        try {
+          usage = await ChatUsage.commit(reservation, result.tokens);
+        } catch (usageErr) {
+          // The reply is already saved; don't fail the customer's request over bookkeeping.
+          console.error("Chat usage commit failed:", usageErr.message);
+        }
+      }
+
       return res.status(200).json({
         success: true,
         conversationId: String(conversation._id),
@@ -223,11 +265,23 @@ const SendMessage = async (req, res) => {
         products: cards,
         requiresLogin: !!result.requiresLogin,
         message: publicMessage(assistantMessage),
+        ...(usage ? { usage } : {}),
       });
     } finally {
       inFlight.delete(lockKey);
+      if (reservation && !committed) await ChatUsage.release(reservation);
     }
   } catch (err) {
+    if (err instanceof ChatUsage.UsageLimitError) {
+      return res.status(429).json({
+        success: false,
+        code: err.code,
+        message: err.message,
+        usage: err.usage,
+        resetsAt: err.usage?.resetsAt,
+      });
+    }
+
     if (err instanceof ChatbotError) {
       return res.status(err.status).json({ success: false, code: err.code, message: err.message });
     }
@@ -268,4 +322,39 @@ const GetConversation = async (req, res) => {
   }
 };
 
-module.exports = { SendMessage, GetConversation, _internal: { selectCards, sanitizeMessage } };
+// =====================================================
+// GET /api/chatbot/usage  (logged-in customer only)
+// =====================================================
+const GetUsage = async (req, res) => {
+  if (!req.user?.userId) {
+    return res.status(401).json({
+      success: false,
+      code: "AUTH_REQUIRED",
+      message: "Please log in to see your AI chat usage.",
+    });
+  }
+
+  try {
+    const usage = await ChatUsage.getUsage(req.user.userId);
+    return res.status(200).json({ success: true, usage, ...usage });
+  } catch (err) {
+    console.error("Chatbot GetUsage error:", err.message);
+    return res.status(500).json({ success: false, code: "SERVER_ERROR", message: "Something went wrong." });
+  }
+};
+
+// =====================================================
+// GET /api/chatbot/config  (public - only what the widget needs)
+// =====================================================
+const GetPublicConfig = async (req, res) => {
+  try {
+    const settings = await ChatbotSettings.getSettings();
+    res.set("Cache-Control", "no-store");
+    return res.status(200).json({ success: true, config: ChatbotSettings.toPublicConfig(settings) });
+  } catch (err) {
+    console.error("Chatbot GetPublicConfig error:", err.message);
+    return res.status(500).json({ success: false, code: "SERVER_ERROR", message: "Something went wrong." });
+  }
+};
+
+module.exports = { SendMessage, GetConversation, GetUsage, GetPublicConfig, _internal: { selectCards, sanitizeMessage } };

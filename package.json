@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "main": "Server.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "node --test --test-concurrency=1 tests/",
     "start": "node Server.js"
   },
   "author": "",
@@ -23,5 +23,9 @@
     "multer": "^2.3.0",
     "nodemailer": "^9.0.6",
     "razorpay": "^2.9.8"
+  },
+  "devDependencies": {
+    "mongodb-memory-server": "^10.4.3",
+    "supertest": "^7.3.2"
   }
 }

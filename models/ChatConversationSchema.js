@@ -52,6 +52,21 @@ const chatMessageSchema = new mongoose.Schema(
       type: Boolean,
       default: undefined,
     },
+    // Gemini token consumption for this reply (assistant messages only).
+    // Internal cost monitoring; never exposed to customers.
+    tokens: {
+      type: new mongoose.Schema(
+        {
+          model: String,
+          inputTokens: Number,
+          outputTokens: Number,
+          totalTokens: Number,
+          calls: Number,
+        },
+        { _id: false }
+      ),
+      default: undefined,
+    },
     createdAt: {
       type: Date,
       default: Date.now,

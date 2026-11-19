@@ -1,7 +1,7 @@
 const express = require("express");
 const { rateLimit, ipKeyGenerator } = require("express-rate-limit");
 
-const { SendMessage, GetConversation } = require("../Controller/ChatbotController");
+const { SendMessage, GetConversation, GetUsage, GetPublicConfig } = require("../Controller/ChatbotController");
 const { startModelHealthChecks } = require("../Services/GeminiService");
 const optionalAuthMiddleware = require("../Middleware/OptionalAuthMiddleware");
 
@@ -51,5 +51,7 @@ const readLimiter = rateLimit({
 // Optional auth runs first so the limiter can key by customer.
 router.post("/message", optionalAuthMiddleware, messageLimiter, dailyLimiter, SendMessage);
 router.get("/conversations/:id", optionalAuthMiddleware, readLimiter, GetConversation);
+router.get("/usage", optionalAuthMiddleware, readLimiter, GetUsage); // 401 for guests
+router.get("/config", readLimiter, GetPublicConfig);
 
 module.exports = router;
