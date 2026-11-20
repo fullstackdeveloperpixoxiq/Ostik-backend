@@ -50,6 +50,13 @@ const allowedOrigins= [
 
 ]
 
+// Local development only: allow frontends opened via a private LAN IP
+// (10.x, 172.16-31.x, 192.168.x) so phones on the same network can call the
+// API directly. Opt-in with ALLOW_LAN_ORIGINS=true; never set it in production.
+if (process.env.ALLOW_LAN_ORIGINS === "true") {
+    allowedOrigins.push(/^http:\/\/(10(\.\d{1,3}){3}|192\.168(\.\d{1,3}){2}|172\.(1[6-9]|2\d|3[01])(\.\d{1,3}){2}):\d+$/)
+}
+
 app.use(
     cors({
         origin: allowedOrigins,
@@ -92,7 +99,8 @@ const Port= process.env.PORT || 5000;
 //DB
 ConnectDB()
 
-app.listen(Port,()=>{
+// 0.0.0.0 = reachable from localhost and from other devices on the LAN.
+app.listen(Port, "0.0.0.0", ()=>{
     console.log(`Server running on ${Port} `);
     
 })

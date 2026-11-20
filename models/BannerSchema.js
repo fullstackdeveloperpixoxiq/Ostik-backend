@@ -19,6 +19,26 @@ const bannerSchema = new mongoose.Schema(
       required: true,
     },
 
+    // Optional artwork for phones (<=480px). Falls back to `image` when empty.
+    mobileImage: {
+      type: String,
+      default: "",
+    },
+
+    // CSS object-position used when the image is cropped to fit the banner,
+    // e.g. "center", "left center", "70% 50%".
+    imagePosition: {
+      type: String,
+      default: "center",
+      trim: true,
+    },
+
+    mobileImagePosition: {
+      type: String,
+      default: "center",
+      trim: true,
+    },
+
     buttonText: {
       type: String,
       default: "Shop Now",

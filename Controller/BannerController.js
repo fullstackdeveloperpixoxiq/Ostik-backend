@@ -1,6 +1,42 @@
 const Banner = require("../models/BannerSchema");
 const cloudinary= require("../Config/Cloudinary")
 
+// Upload one in-memory file to Cloudinary and return its URL.
+const uploadBannerImage = (file) =>
+  new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(
+      { folder: "ostik/banners", resource_type: "image" },
+      (error, result) => (error ? reject(error) : resolve(result.secure_url))
+    );
+    stream.end(file.buffer);
+  });
+
+// Works with upload.fields() (req.files) and the old upload.single() (req.file).
+const getFile = (req, name) =>
+  req.files?.[name]?.[0] || (name === "image" ? req.file : undefined);
+
+// Delete a banner image from Cloudinary, but only when no other banner
+// (desktop or mobile) still points at the same URL. Failures are logged and
+// never block the request; non-Cloudinary URLs are left alone.
+const destroyBannerImageIfUnused = async (url, excludeId) => {
+  try {
+    if (!url || !url.includes("res.cloudinary.com")) return;
+
+    const stillUsed = await Banner.exists({
+      _id: { $ne: excludeId },
+      $or: [{ image: url }, { mobileImage: url }],
+    });
+    if (stillUsed) return;
+
+    const match = url.match(/\/upload\/(?:v\d+\/)?(.+?)(?:\.[^./]+)?$/);
+    if (!match) return;
+
+    await cloudinary.uploader.destroy(match[1], { resource_type: "image" });
+  } catch (error) {
+    console.log("Failed to delete Cloudinary banner image:", error.message);
+  }
+};
+
 
 // =====================================
 // CREATE BANNER - ADMIN
@@ -8,7 +44,7 @@ const cloudinary= require("../Config/Cloudinary")
 const CreateBanner = async (req, res) => {
   try {
     console.log("BODY:", req.body);
-    console.log("FILE:", req.file);
+    console.log("FILES:", Object.keys(req.files || {}));
 
     const {
       title,
@@ -17,7 +53,12 @@ const CreateBanner = async (req, res) => {
       buttonLink,
       category,
       displayOrder,
+      imagePosition,
+      mobileImagePosition,
     } = req.body;
+
+    const imageFile = getFile(req, "image");
+    const mobileFile = getFile(req, "mobileImage");
 
     // Check title
     if (!title) {
@@ -27,38 +68,26 @@ const CreateBanner = async (req, res) => {
     }
 
     // Check image
-    if (!req.file) {
+    if (!imageFile) {
       return res.status(400).json({
         message: "Banner image is required",
       });
     }
 
-    // Upload image to Cloudinary
-    const uploadResult = await new Promise((resolve, reject) => {
-      const stream = cloudinary.uploader.upload_stream(
-        {
-          folder: "ostik/banners",
-          resource_type: "image",
-        },
-        (error, result) => {
-          if (error) {
-            reject(error);
-          } else {
-            resolve(result);
-          }
-        }
-      );
-
-      stream.end(req.file.buffer);
-    });
-
-    console.log("CLOUDINARY URL:", uploadResult.secure_url);
+    // Upload image(s) to Cloudinary
+    const [imageUrl, mobileImageUrl] = await Promise.all([
+      uploadBannerImage(imageFile),
+      mobileFile ? uploadBannerImage(mobileFile) : Promise.resolve(""),
+    ]);
 
     // Create banner in MongoDB
     const banner = await Banner.create({
       title,
       subtitle,
-      image: uploadResult.secure_url,
+      image: imageUrl,
+      mobileImage: mobileImageUrl,
+      imagePosition: imagePosition || "center",
+      mobileImagePosition: mobileImagePosition || "center",
       buttonText,
       buttonLink,
       category: category || null,
@@ -156,6 +185,9 @@ const UpdateBanner = async (req, res) => {
       category,
       displayOrder,
       status,
+      imagePosition,
+      mobileImagePosition,
+      removeMobileImage,
     } = req.body;
 
     // Update text fields
@@ -187,34 +219,42 @@ const UpdateBanner = async (req, res) => {
       banner.status = status;
     }
 
-    // Update image if a new image is selected
-    if (req.file) {
-      const uploadResult = await new Promise(
-        (resolve, reject) => {
-          const stream =
-            cloudinary.uploader.upload_stream(
-              {
-                folder: "ostik/banners",
-                resource_type: "image",
-              },
-              (error, result) => {
-                if (error) {
-                  reject(error);
-                } else {
-                  resolve(result);
-                }
-              }
-            );
-
-          stream.end(req.file.buffer);
-        }
-      );
-
-      banner.image =
-        uploadResult.secure_url;
+    if (imagePosition !== undefined) {
+      banner.imagePosition = imagePosition || "center";
     }
 
+    if (mobileImagePosition !== undefined) {
+      banner.mobileImagePosition = mobileImagePosition || "center";
+    }
+
+    const previousImage = banner.image;
+    const previousMobileImage = banner.mobileImage;
+
+    if (removeMobileImage === "true" || removeMobileImage === true) {
+      banner.mobileImage = "";
+    }
+
+    // Replace images only when new files are selected
+    const imageFile = getFile(req, "image");
+    const mobileFile = getFile(req, "mobileImage");
+
+    const [newImage, newMobileImage] = await Promise.all([
+      imageFile ? uploadBannerImage(imageFile) : Promise.resolve(null),
+      mobileFile ? uploadBannerImage(mobileFile) : Promise.resolve(null),
+    ]);
+
+    if (newImage) banner.image = newImage;
+    if (newMobileImage) banner.mobileImage = newMobileImage;
+
     await banner.save();
+
+    // Clean up images this banner no longer uses (after the save succeeds).
+    const kept = [banner.image, banner.mobileImage];
+    await Promise.all(
+      [...new Set([previousImage, previousMobileImage])]
+        .filter((url) => url && !kept.includes(url))
+        .map((url) => destroyBannerImageIfUnused(url, banner._id))
+    );
 
     return res.status(200).json({
       message: "Banner updated successfully",
@@ -246,6 +286,12 @@ const DeleteBanner = async (req, res) => {
         message: "Banner not found",
       });
     }
+
+    await Promise.all(
+      [...new Set([banner.image, banner.mobileImage])].map((url) =>
+        destroyBannerImageIfUnused(url, banner._id)
+      )
+    );
 
     return res.status(200).json({
       message: "Banner deleted successfully",
